@@ -1,0 +1,286 @@
+<?php
+
+include_once 'includes/config.php';
+include_once 'includes/php-dbi.php';
+include_once 'includes/functions.php';
+include_once 'includes/connect.php';
+include_once 'includes/ui.php';
+
+include_once 'includes/translate.php';
+
+$acct = getIntValue ( "acct" );
+if ( empty ( $acct ) ) {
+  fatalError ( "No account specified" );
+}
+
+// Get account info
+$sql = "SELECT chk_bank, chk_name, chk_account_no, " .
+  "chk_balance, chk_bank_balance " .
+  "FROM chk_account WHERE chk_acct_id = $acct";
+$res = dbi_query ( $sql );
+$Account = array ();
+if ( $res ) {
+  $row = dbi_fetch_row ( $res );
+  if ( $row ) {
+    $Account['acct_id'] = $acct;
+    $Account['bank'] = $row[0];
+    $Account['name'] = $row[1];
+    $Account['account_no'] = $row[2];
+    $Account['balance'] = $row[3];
+    $Account['bank_balance'] = $row[4];
+    dbi_free_result ( $res );
+  } else {
+    fatalError ( "No such acct: $acct" );
+  }
+} else {
+  fatalError ( "Error in query:<br />$sql<br />" . dbi_error () );
+}
+// Get first and last transaction date.
+$sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans ' .
+  'WHERE chk_acct_id = ?';
+$res = dbi_execute ( $sql, [ $acct ] );
+if ( $res ) {
+  if ( $row = dbi_fetch_row ( $res ) ) {
+    $Account['start_date'] = $row[0];
+    $Account['end_date'] = $row[1];
+  }
+}
+
+$start = getValue ( "start" );
+$end = getValue ( "end" );
+$search = getValue ( "search" );
+$rec = getValue ( "reconciled" );
+$format = getValue ( "format" );
+if ( $format == 'html' || $format == 'xls' ) {
+  // Supported.
+} else if ( ! empty ( $format) ) {
+  $format = "text";
+}
+
+// Do the export now if a start date was supplied
+$doExport = ( ! empty ( $start ) && ! empty ( $format ) );
+if ( $doExport && $format == 'text' )
+  header("Content-Type: text/plain");
+
+$startYear = 0;
+if ( ! empty ( $start ) ) {
+  $dateAr = preg_split ( "/[\/\-]/", $start );
+  if ( empty ( $dateAr[2] ) )
+    $dateAr[2] = date ( "Y" );
+  else {
+    if ( $dateAr[2] < 100 )
+      $dateAr[2] += 2000;
+    if ( $dateAr[2] > 2050 )
+      $dateAr[2] -= 100; // 1990s
+  }
+  $start = sprintf ( "%04d%02d%02d", $dateAr[2], $dateAr[0], $dateAr[1] );
+  $startPretty = sprintf ( "%d/%d/%d", $dateAr[0], $dateAr[1], $dateAr[2] );
+  $startYear = $dateAr[2];
+  $startMonth = $dateAr[1];
+  $startDay = $dateAr[2];
+  // If start date with no end date, assume 1 year
+  if ( $doExport && empty  ( $end ) ) {
+    $end = sprintf ( "%04d%02d%02d", $dateAr[2] + 1, $dateAr[0], $dateAr[1] );
+  }
+}
+
+if ( ! empty ( $end ) ) {
+  $dateAr = preg_split ( "/[\/\-]/", $end );
+  if ( empty ( $dateAr[2] ) )
+    $dateAr[2] = date ( "Y" );
+  else {
+    if ( $dateAr[2] < 100 )
+      $dateAr[2] += 2000;
+    if ( $dateAr[2] > 2050 )
+      $dateAr[2] -= 100; // 1990s
+  }
+  $end = sprintf ( "%04d%02d%02d", $dateAr[2], $dateAr[0], $dateAr[1] );
+  $endPretty = sprintf ( "%d/%d/%d", $dateAr[0], $dateAr[1], $dateAr[2] );
+}
+
+if ( $doExport ) {
+  $sql = "SELECT chk_trans_id, chk_type, chk_no, chk_amount, " .
+    "chk_date, chk_description, chk_reconciled " .
+    "FROM chk_trans " .
+    "WHERE chk_acct_id = $acct ";
+  if ( ! empty ( $start ) )
+    $sql .= "AND chk_date >= $start ";
+  if ( ! empty ( $end ) )
+    $sql .= "AND chk_date <= $end ";
+  if ( ! empty ( $rec ) && $rec == 'yes' )
+    $sql .= "AND chk_reconciled = 'Y' ";
+  if ( ! empty ( $rec ) && $rec == 'no' )
+    $sql .= "AND NOT chk_reconciled = 'Y' ";
+  $sql .= "ORDER BY chk_date, chk_type, chk_no ASC";
+  //echo "SQL: $sql <p>";
+  $res = dbi_query ( $sql );
+  if ( $format == 'html' ) {
+    print_header ( translate("Account") . ": " . $Account['name'] );
+    print_heading ( translate("Export") . " " . translate("Account") . ": " . $Account['name'] );
+    print_account_info ( $Account );
+    open_table ( array ( "Date", "Chk#", "Comment", "Amount" ) );
+  } else if ( $format == 'text' ) {
+    print "Account: " . $Account['name'] . "\n\n";
+    printf ( "%10s %6s %50s %12s\n",
+      "Date", "Check#", "Description", "Amount" );
+    printf ( "%10s %6s %50s %12s\n",
+      "----------", "------", "--------------------------------------------------", "------------" );
+  } else {
+    fatalError ( "XLS not yet supported :-(" );
+  }
+
+  if ( $res ) {
+    $out = array ();
+    $cnt = 0;
+    $lastDate = '';
+    $totals = [];
+    while ( $row = dbi_fetch_row ( $res ) ) {
+      $cnt++;
+      $line = '';
+      if ( $format == 'text' ) {
+        $line = sprintf ( "%10s %6s %50s %12.2f\n", 
+          date_to_str ( $row[4], "__mm__/__dd__/__yyyy__", false ),
+          empty ( $row[2] ) ? '-' : sprintf ( "%d", $row[2] ),
+          $row[5], $row[3] );
+      } else if ( $format == 'html' ) {
+        if ( $cnt == 0 || $row[4] != $lastDate ) {
+          $out[] = "<tr><td colspan=\"6\" style=\"height: 1px; background-color: #000;\"></td></tr>\n";
+        }
+        if ( $row[3] > 0 ) {
+          $class = "deposit";
+        } else {
+          $class = ( $cnt % 2 == 0 ) ? "withdrawal-even" : "withdrawal-odd";
+        }
+        $line = "<tr><td class=\"$class\">" .
+          "<a href=\"edit_trans.php?acct=$acct&trans=$row[0]\">" .
+          date_to_str ( $row[4], "__mm__/__dd__/__yyyy__", false ) .
+          "</a></td>";
+        $num = empty ( $row[2] ) ? '-' : $row[2];
+        $line .= "<td class=\"$class\">" . $num . "</td>";
+        $line .= "<td class=\"$class\">" . htmlentities ( $row[5] ) . "</td>";
+        $line .= "<td class=\"$class\" align=\"right\">" . ( sprintf ( "%.02f", $row[3] ) ) . "</td>";
+        //$line .= "<td class=\"$class\" align=\"right\"><img src=\"" .
+        //  ( $row[6] == 'Y' ? 'images/reconciled.png' : 'images/not_reconciled.png' ) .
+        //  "\" alt=\"rec\" /></td>";
+      }
+      $out[] = $line;
+      $lastDate = $row[4];
+      $recip = strtoupper($row[5]);
+      if (!isset($totals[$recip])) {
+        $totals[$recip] = 0;
+      }
+      $totals[$recip] += $row[3];
+    }
+    dbi_free_result ( $res );
+  } else {
+    fatalError ( translate("Database error") . ": " . dbi_error () );
+  }
+  if ( $format == 'html' )
+    $out[] = "<tr><td colspan=\"6\" style=\"height: 1px; background-color: #000;\"></td></tr>\n";
+
+
+  for ( $i = 0; $i < count ( $out ); $i++ ) {
+    print $out[$i];
+  }
+  if ( $format == 'html' )
+    close_table ();
+
+  // Now print spending summary
+  $sortKeys = [ ];
+  foreach ( $totals as $desc => $total ) {
+    //printf ( "%10.2f %s\n", $total, $desc );
+    $t = ( $total > 0.0 ? $total : 0 - $total );
+    $key = sprintf ( "%12.2f %s", $t, $desc );
+    $sortKeys[] = $key;
+  }
+  arsort ( $sortKeys );
+  //print_r ( $sortKeys ); exit;
+
+  // Deposits first
+  if ( $format == 'html' ) {
+    $out[] = "<h3>Deposit Totals</h3>\n";
+    $out[] = "<table><tr><th>Amount</th><th>Description</th></tr>\n";
+  } else {
+    print "\nDeposit Totals\n";
+    printf ( "%10s %40s\n", "----------",
+      "----------------------------------------" );
+  }
+  foreach ( $sortKeys as $sk ) {
+    $desc = substr($sk, 13);
+    if ( $totals[$desc] > 0 ) {
+      if ( $format == 'html' ) {
+        $out[] = sprintf ( "<tr><td>%10.2f</td><td>%s</td></tr>\n",
+          $totals[$desc], htmlentities ( $desc ) );
+      } else {
+        printf ( "%10.2f %s\n", $totals[$desc], $desc );
+      }
+    }
+  }
+  if ( $format == 'html' ) {
+    $out[] = print "</table>\n";
+  }
+
+  // Now Expenses
+  if ( $format == 'html' ) {
+    $out[] = "<h3>Expense Totals</h3>\n";
+    $out[] = "<table><tr><th>Amount</th><th>Description</th></tr>\n";
+  } else {
+    print "\nExpense Totals\n";
+    printf ( "%10s %40s\n", "----------",
+      "----------------------------------------" );
+  }
+  foreach ( $sortKeys as $sk ) {
+    $desc = substr($sk, 13);
+    if ( $totals[$desc] < 0 ) {
+      if ( $format == 'html' ) {
+        $out[] = sprintf ( "<tr><td>%10.2f</td><td>%s</td></tr>\n",
+          $totals[$desc], htmlentities ( $desc ) );
+      } else {
+        printf ( "%10.2f %s\n", $totals[$desc], $desc );
+      }
+    }
+  }
+  if ( $format == 'html' ) {
+    $out[] = print "</table>\n";
+  }
+
+} else {
+print_header ( translate("Account") . ": " . $Account['name'] );
+print_heading ( translate("Export") . " " . translate("Account") . ": " . $Account['name'] );
+print_account_info ( $Account );
+
+?>
+<form action="export.php">
+<input type="hidden" name="acct" value="<?php echo $acct; ?>" />
+<table border="0">
+<tr><td><b>Date Range:</b></td><td>
+  <input name="start" size="11" value="<?php echo htmlentities ( $startPretty );?>" />
+  <input name="end" size="11" value="<?php echo htmlentities ( $endPretty );?>" />
+</td></tr>
+<tr><td><b>Reconciled:</b></td>
+<td>
+  <input type="radio" id="NotReconciled" name="reconciled" value="no"
+   <?php if ( ! empty($rec) && $rec == 'no' ) echo 'checked="checked"';?> />
+    <label for="NotReconciled">No</label>
+  <input type="radio" id="Reconciled" name="reconciled" value="yes"
+   <?php if ( ! empty($rec) && $rec == 'yes' ) echo 'checked="checked"';?> />
+    <label for="Reconciled">Yes</label>
+  <input type="radio" id="Either" name="reconciled" value="either"
+   <?php if ( ! empty($rec) && $rec == 'either' ) echo 'checked="checked"';?> />
+    <label for="Either">Either</label>
+</td></tr>
+<tr><td><b>Format:</b></td>
+<td><select name="format">
+  <option value="text" <?php if ( $format == "text" ) echo 'selected="selected"';?>>Text</option>
+  <option value="html" <?php if ( $format == "html" ) echo 'selected="selected"';?>>HTML</option>
+  <option value="xls" <?php if ( $format == "xls" ) echo 'selected="selected"';?>>Excel XLS</option>
+  </select></td></tr>
+<tr><td colspan="2"><input type="submit" value="Export" /></td></tr>
+</table>
+</form>
+<?php
+}
+
+if ( $format == 'html' || ! $doExport )
+  print_trailer ();
+?>

@@ -1,0 +1,106 @@
+
+.header { background-color: #888; }
+.deposit { background-color: #8f8; font-size: 12px; }
+.withdrawal { background-color: #f44; font-size: 12px; }
+.withdrawal-odd { background-color: #eee; font-size: 12px; }
+.withdrawal-even { background-color: #bbb; font-size: 12px;
+
+
+$progressBarColour: #F2F2F2;
+$progressValueColour: #17BAB3;
+
+
+.Progress-label {
+    font-size: 1em;
+    font-family: Helvetica, sans-serif;
+    display: block;
+}
+.Progress-main {
+    background-color: red;
+    display: block;
+    width: 100%;
+    height: 0.3em;
+    margin-top: 0.75em;
+}
+.Progress-main::-moz-progress-bar { 
+    background: $progressValueColour;
+}
+.Progress-main::-webkit-progress-bar {
+    background: $progressBarColour;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2) inset;
+}
+.Progress-main::-webkit-progress-value {
+    background: $progressValueColour;
+}
+.Progress-main::-ms-fill { 
+    background: $progressValueColour;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2) inset;
+}
+.Progress-bar {
+    margin-top: 0.95em;
+    background-color: $progressBarColour;
+    height: 0.3em;
+}
+.Progress-value {
+    background-color: $progressValueColour;
+    display: block;
+    height: 0.3em;
+}
+
+
+/* Source: https://www.w3schools.com/howto/tryit.asp?filename=tryhow_js_autocomplete */
+* {
+  box-sizing: border-box;
+}
+.autocomplete {
+  /*the container must be positioned relative:*/
+  position: relative;
+  display: inline-block;
+  font: 12px Arial;
+}
+input {
+  border: 1px solid transparent;
+  background-color: #f1f1f1;
+  padding: 10px;
+  font-size: 16px;
+}
+input[type=text] {
+  background-color: #f1f1f1;
+  width: 100%;
+}
+input[type=submit] {
+  background-color: DodgerBlue;
+  color: #fff;
+  cursor: pointer;
+}
+.autocomplete_items {
+  position: absolute;
+  border: 1px solid #d4d4d4;
+  border-bottom: none;
+  border-top: none;
+  z-index: 99;
+  /*position the autocomplete items to be the same width as the container:*/
+  top: 100%;
+  left: 0;
+  right: 0;
+}
+div.autocomplete_div {
+  background-color: red;
+}
+.autocomplete_items div {
+  padding: 10px;
+  cursor: pointer;
+  background-color: red !important;
+  /*background-color: #fff; */
+  border-bottom: 1px solid #d4d4d4; 
+  font: 12px Arial !important;
+}
+.autocomplete_items div:hover {
+  /*when hovering an item:*/
+  background-color: #e9e9e9; 
+}
+.autocomplete-active {
+  /*when navigating through the items using the arrow keys:*/
+  background-color: DodgerBlue !important; 
+  color: #ffffff; 
+}
