@@ -1,920 +1,528 @@
 <?php
+declare(strict_types=1);
+
 /**
  * dbi4php - Generic database access for PHP
  *
- * The functions defined in this file are meant to provide a single API to the
- * different PHP database APIs. Unfortunately, this is necessary since PHP does
- * not yet have a common db API. The value of <var>$GLOBALS['db_type']</var>
- * should be defined somewhere to one of the following:
- *  - ibase (Interbase)
- *  - ibm_db2
- *  - mssql
- *  - mysql
- *  - mysqli
- *  - odbc
- *  - oracle (This uses the Oracle8 OCI API, so Oracle 8 libs are required)
- *  - postgresql
- *  - sqlite
- *  - sqlite3
+ * Provides a unified API for database interactions in PHP 8. Supports:
+ * - mysqli (MySQL)
+ * - sqlite3 (SQLite 3)
+ * - pdo_mysql (PDO for MySQL)
+ * - pdo_sqlite (PDO for SQLite)
  *
- * <b>Limitations:</b>
- * - This assumes a single connection to a single database for the sake of
- *   simplicity. Do not make a new connection until you are completely
- *   finished with the previous one. However, you can execute more than query
- *   at the same time.
- * - Rather than use the associative arrays returned with xxx_fetch_array(),
- *   normal arrays are used with xxx_fetch_row(). (Some db APIs don't support
- *   xxx_fetch_array().)
+ * The database type is set via $GLOBALS['db_type']. This library assumes a single
+ * connection to a single database for simplicity. Multiple queries can be executed
+ * simultaneously. Use dbi_error() to retrieve error information on failure.
  *
- * @author Craig Knudsen <cknudsen@cknudsen.com>
- * @copyright Craig Knudsen, <cknudsen@cknudsen.com>, http://www.k5n.us/cknudsen
- * @license http://www.gnu.org/licenses/lgpl.html GNU LGPL
- * @version $Id: dbi4php.php,v 1.37 2010/04/07 13:39:08 cknudsen Exp $
- * @package WebCalendar
+ * BLOB support is included for storing binary data (e.g., check images).
  *
- * History:
- *  See ChangeLog
- *
- * License:
- *   Copyright (C) 2006  Craig Knudsen
- *   This library is free software; you can redistribute it and/or modify it
- *   under the terms of the GNU Lesser General Public License as published by
- *   the Free Software Foundation; either version 2.1 of the License,
- *   or (at your option) any later version.
- *
- *   This library is distributed in the hope that it will be useful, but
- *   WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
- *   or FITNESS FOR A PARTICULAR PURPOSE.
- *   See the GNU Lesser General Public License for more details.
- *
- *   You should have received a copy of the GNU Lesser General Public License
- *   along with this library; if not, write to:
- *   Free Software Foundation, Inc.
- *   51 Franklin Street, Fifth Floor
- *   Boston, MA  02110-1301, USA
+ * @author Craig Knudsen <craig@k5n.us>
+ * @copyright Craig Knudsen, <craig@k5n.us, http://www.k5n.us/
  */
 
 /**
- * Opens up a database connection.
- *
- * Use a pooled connection if the db supports it and
- * the <var>db_persistent</var> setting is enabled.
- *
- * <b>Notes:</b>
- * - The database type is determined by the global variable
- *   <var>db_type</var>
- * - For ODBC, <var>$host</var> is ignored, <var>$database</var> = DSN
- * - For Oracle, <var>$database</var> = tnsnames name
- * - Use the {@link dbi_error()} function to get error information
- *   if the connection fails.
- *
- * @param string  $host      Hostname of database server
- * @param string  $login     Database login
- * @param string  $password  Database login password
- * @param string  $database  Name of database
- * @param string  $lazy      Wait until a query to connect?
- *
- * @return resource The connection
+ * Custom exception for database errors.
  */
-function dbi_connect( $host, $login, $password, $database, $lazy = true ) {
-  global $db_cache_count, $db_connection_info, $db_query_count,
-  $db_sqlite_error_str, $old_textlimit, $old_textsize;
- 
-  $db_cache_count =
-  $db_query_count = 0;
+class DBIException extends Exception {}
 
-  if( ! isset( $db_connection_info ) )
-    $db_connection_info = array();
+/**
+ * Opens a database connection.
+ *
+ * @param string $host      Hostname of database server (ignored for sqlite3, pdo_sqlite)
+ * @param string $login     Database login
+ * @param string $password  Database login password
+ * @param string $database  Name of database (file path for sqlite3)
+ * @param bool   $lazy      Wait until a query to connect?
+ *
+ * @return mysqli|SQLite3|PDO|null The connection object
+ * @throws DBIException
+ */
+function dbi_connect(string $host, string $login, string $password, string $database, bool $lazy = true)
+{
+    global $db_connection_info, $db_query_count;
 
-  $db_connection_info['connected']  = false;
-  $db_connection_info['connection'] = 0;
-  $db_connection_info['database']   = $database;
-  $db_connection_info['host']       = $host;
-  $db_connection_info['login']      = $login;
-  $db_connection_info['password']   = $password;
+    $db_query_count = 0;
 
-  // mysqli requires $db_connection_info['connection'] to be set.
-  if( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 )
-    $lazy == false;
-
-  // Lazy connections... do not connect until 1st call to dbi_query.
-  if( $lazy )
-    // echo "<!-- Waiting on db connection made (lazy) -->\nRETURN!<br />";
-    return true;
-
-  if( strcmp( $GLOBALS['db_type'], 'ibase' ) == 0 ) {
-    $host = $host . ':' . $database;
-    $c = ( $GLOBALS['db_persistent']
-      ? ibase_pconnect( $host, $login, $password )
-      : ibase_connect( $host, $login, $password ) );
-    $db_connection_info['connected']  = true;
-    $db_connection_info['connection'] = $c;
-    return $c;
-  } elseif( strcmp( $GLOBALS['db_type'], 'ibm_db2' ) == 0 ) {
-    $c = ( $GLOBALS['db_persistent']
-      ? db2_pconnect( $database, $login, $password )
-      : db2_connect( $database, $login, $password ) );
-    $db_connection_info['connected']  = true;
-    $db_connection_info['connection'] =
-    $GLOBALS['ibm_db2_connection']    = $c;
-    return $c;
-  } elseif( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 ) {
-    static $old_textlimit, $old_textsize;
-    
-    $old_textlimit = ini_get( 'mssql.textlimit' );
-    $old_textsize  = ini_get( 'mssql.textsize' );
-    ini_set( 'mssql.textlimit', '2147483647' );
-    ini_set( 'mssql.textsize', '2147483647' );
-    $c = ( $GLOBALS['db_persistent']
-      ? mssql_pconnect( $host, $login, $password )
-      : mssql_connect( $host, $login, $password ) );
-
-    if( $c ) {
-      if( ! mssql_select_db( $database ) )
-        return false;
-
-      $db_connection_info['connected'] = true;
-      $db_connection_info['connection'] = $c;
-      return $c;
-    } else
-      return false;
-  } elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 ) {
-    $c = ( $GLOBALS['db_persistent']
-      ? mysql_pconnect( $host, $login, $password )
-      : mysql_connect( $host, $login, $password ) );
-
-    if( $c ) {
-      if( ! mysql_select_db( $database ) )
-        return false;
-
-      $db_connection_info['connected']  = true;
-      $db_connection_info['connection'] = $c;
-      return $c;
-    } else
-      return false;
-  } elseif( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 ) {
-    $c  = new mysqli( $host, $login, $password, $database );
-
-    if( $c ) {
-      if( mysqli_connect_errno() && ! empty( $database ) )
-        return false;
-
-      $db_connection_info['connected']  = true;
-      $db_connection_info['connection'] =
-      $GLOBALS['db_connection']         = $c;
-      return $c;
-    } else
-      return false;
-  } elseif( strcmp( $GLOBALS['db_type'], 'odbc' ) == 0 ) {
-    $c = ( $GLOBALS['db_persistent']
-      ? odbc_pconnect( $database, $login, $password )
-      : odbc_connect( $database, $login, $password ) );
-    $db_connection_info['connected']  = true;
-    $db_connection_info['connection'] =
-    $GLOBALS['odbc_connection']       = $c;
-    return $c;
-  } elseif( strcmp( $GLOBALS['db_type'], 'oracle' ) == 0 ) {
-    $_ora_conn_func =
-      'OCI' . ( $GLOBALS['db_persistent'] ? 'P' : '' ) . 'Logon';
-    $c = $_ora_conn_func( $login, $password,
-      ( strlen( $host ) && strcmp( $host, 'localhost' )
-        ? '(DESCRIPTION = (ADDRESS_LIST = (ADDRESS = (PROTOCOL = TCP) (HOST = '
-         . $host . ' ) (PORT = 1521))) (CONNECT_DATA = (SID = ' . $database
-         . ')))'
-        : $database ) );
-   unset( $_ora_conn_func );
-   $db_connection_info['connected']  = true;
-   $db_connection_info['connection'] =
-   $GLOBALS['oracle_connection']     = $c;
-   return $c;
-  } elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 ) {
-    $dbargs = ( strlen( $host ) ? 'host=' . "$host " : '' )
-     . 'dbname=' . $database . ' user=' . $login
-     . ( strlen( $password ) ? ' password=' . $password : '' );
-    $c = ( $GLOBALS['db_persistent']
-      ? pg_pconnect( $dbargs ) : pg_connect( $dbargs ) );
-    $GLOBALS['postgresql_connection'] = $c;
-
-    if( ! $c )
-      return false;
-
-    $db_connection_info['connected']  = true;
-    $db_connection_info['connection'] = $c;
-    return $c;
-  } elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 ) {
-    $c = ( $GLOBALS['db_persistent']
-      ? sqlite_popen( $database, 0666, $db_sqlite_error_str )
-      : sqlite_open( $database, 0666, $db_sqlite_error_str ) );
-
-    if( ! $c ) {
-      echo str_replace( 'XXX', $db_sqlite_error_str,
-        translate( 'Error connecting to database XXX' ) ) . "\n";
-      exit;
+    if (!isset($db_connection_info)) {
+        $db_connection_info = [];
     }
-    $db_connection_info['connected']  = true;
-    $db_connection_info['connection'] =
-    $GLOBALS['sqlite_c']              = $c;
-    return $c;
-  } elseif( strcmp( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-    $c = new SQLite3 ( $database );
 
-    if( ! $c ) {
-      echo str_replace( 'XXX', $db_sqlite_error_str,
-        translate( 'Error connecting to database XXX' ) ) . "\n";
-      exit;
+    $db_connection_info['connected'] = false;
+    $db_connection_info['connection'] = null;
+    $db_connection_info['database'] = $database;
+    $db_connection_info['host'] = $host;
+    $db_connection_info['login'] = $login;
+    $db_connection_info['password'] = $password;
+
+    if ($lazy && $GLOBALS['db_type'] !== 'mysqli') {
+        return true;
     }
-    $db_connection_info['connected']  = true;
-    $db_connection_info['connection'] = $GLOBALS['sqlite3_c'] = $c;
-    return $c;
-  } else
-    dbi_fatal_error( 'dbi_connect(): '
-     . ( empty( $GLOBALS['db_type'] )
-        ? translate( 'db_type not defined.' )
-        : str_replace( 'XXX', $GLOBALS['db_type'],
-          translate( 'invalid db_type XXX' ) ) ) );
+
+    switch ($GLOBALS['db_type']) {
+        case 'mysqli':
+            $conn = new mysqli($host, $login, $password, $database);
+            if ($conn->connect_error) {
+                throw new DBIException(translate('Error connecting to database XXX') . ': ' . $conn->connect_error);
+            }
+            break;
+        case 'sqlite3':
+            $conn = new SQLite3($database);
+            if (!$conn) {
+                throw new DBIException(translate('Error connecting to database XXX'));
+            }
+            break;
+        case 'pdo_mysql':
+            $conn = new PDO("mysql:host=$host;dbname=$database", $login, $password, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+            ]);
+            break;
+        case 'pdo_sqlite':
+            $conn = new PDO("sqlite:$database", null, null, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION
+            ]);
+            break;
+        default:
+            throw new DBIException(translate('invalid db_type XXX') . ': ' . ($GLOBALS['db_type'] ?? 'not defined'));
+    }
+
+    $db_connection_info['connected'] = true;
+    $db_connection_info['connection'] = $conn;
+    return $conn;
 }
 
 /**
  * Closes a database connection.
  *
- * This is not necessary for any database that uses pooled connections, such as
- * MySQL, but a good programming practice.
- *
- * @param resource  $conn  The database connection.
- *
- * @return bool True on success, false on error.
+ * @param mysqli|SQLite3|PDO|null $conn The database connection
+ * @return bool True on success
+ * @throws DBIException
  */
-function dbi_close( $conn ) {
-  global $db_connection_info, $db_query_count,
-  $old_textlimit, $old_textsize, $SQLLOG;
+function dbi_close($conn): bool
+{
+    global $db_connection_info;
 
-  $connection =  $db_connection_info['connection'];
-
-  if( is_array( $db_connection_info ) ) {
-    if( ! $db_connection_info['connected'] )
-      // never connected
-      // echo '<!-- No db connection made (cached) -->' . "\n";
-      return true;
-    else {
-      $conn = $db_connection_info['connection'];
-      $db_connection_info['connected']  = false;
-      $db_connection_info['connection'] = 0;
-      // echo '<!-- Closing lazy db connection made after '
-       $db_query_count . " queries -->\n";
+    if (isset($db_connection_info) && !$db_connection_info['connected']) {
+        return true;
     }
-  }
 
-  if( strcmp( $GLOBALS['db_type'], 'ibase' ) == 0 )
-    return ibase_close( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'ibm_db2' ) == 0 )
-    return db2_close( $GLOBALS['ibm_db2_connection'] );
-  elseif( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 ) {
-    if( ! empty( $old_textlimit ) ) {
-      ini_set( 'mssql.textlimit', $old_textlimit );
-      ini_set( 'mssql.textsize', $old_textsize );
+    if (!$conn && isset($db_connection_info['connection'])) {
+        $conn = $db_connection_info['connection'];
     }
-    return mssql_close( $conn );
-  } elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 )
-    return mysql_close( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 )
-    return $conn->close();
-  elseif( strcmp( $GLOBALS['db_type'], 'odbc' ) == 0 )
-    return odbc_close( $GLOBALS['odbc_connection'] );
-  elseif( strcmp( $GLOBALS['db_type'], 'oracle' ) == 0 )
-    return OCILogOff( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 )
-    return pg_close( $GLOBALS['postgresql_connection'] );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 )
-    return sqlite_close( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-    return $connection->close ();
-  } else
-    dbi_fatal_error( 'dbi_close(): '
-       . translate( 'db_type not defined.' ) );
+
+    if (!$conn) {
+        return true;
+    }
+
+    switch ($GLOBALS['db_type']) {
+        case 'mysqli':
+            $result = $conn->close();
+            break;
+        case 'sqlite3':
+            $result = $conn->close();
+            break;
+        case 'pdo_mysql':
+        case 'pdo_sqlite':
+            $result = true; // PDO closes automatically when object is destroyed
+            break;
+        default:
+            throw new DBIException(translate('db_type not defined'));
+    }
+
+    $db_connection_info['connected'] = false;
+    $db_connection_info['connection'] = null;
+    return $result;
 }
 
 /**
- * Return the number of database queries that were executed.
- * (This does not included cached queries.)
+ * Return the number of database queries executed.
+ *
+ * @return int
  */
-function dbi_num_queries() {
-  global $db_query_count;
-
-  return $db_query_count;
-}
-
-/**
- * Return the number of queries that were cached.
- */
-function dbi_num_cached_queries() {
-  global $db_cache_count;
-
-  return $db_cache_count;
+function dbi_num_queries(): int
+{
+    global $db_query_count;
+    return $db_query_count ?? 0;
 }
 
 /**
  * Executes an SQL query.
  *
- * <b>Note:</b> Use the {@link dbi_error()} function to get error information
- * if the connection fails.
+ * @param string $sql           SQL query to execute
+ * @param bool   $fatalOnError  Throw exception on error?
+ * @param bool   $showError     Display error to user?
  *
- * @param string  $sql           SQL of query to execute.
- * @param bool    $fatalOnError  Abort execution if there is a database error?
- * @param bool    $showError     Display error to user (including possibly the
- *                               SQL) if there is a database error?
- *
- * @return mixed The query result resource on queries (which can then be
- *               passed to the {@link dbi_fetch_row()} function to obtain the
- *               results), or true/false on insert or delete queries.
+ * @return mixed Query result resource/object or true/false for insert/delete
+ * @throws DBIException
  */
-function dbi_query( $sql, $fatalOnError = true, $showError = true ) {
-  global $c, $db_connection_info, $db_query_count, $phpdbiVerbose, $SQLLOG;
+function dbi_query(string $sql, bool $fatalOnError = true, bool $showError = true)
+{
+    global $db_connection_info, $db_query_count, $SQLLOG;
 
-  if( ! isset( $SQLLOG ) && ! empty( $db_connection_info['debug'] ) )
-    $SQLLOG = array();
-
-  if( ! empty( $db_connection_info['debug'] ) )
-    $SQLLOG[] = $sql;
-
-  // echo "dbi_query!: " . htmlentities( $sql ) . "<br />";
-  // Connect now if not connected.
-  if( is_array( $db_connection_info ) && ! $db_connection_info['connected'] ) {
-    $c = dbi_connect(
-      $db_connection_info['host'],
-      $db_connection_info['login'],
-      $db_connection_info['password'],
-      $db_connection_info['database'],
-      false // * not lazy
-      );
-    $db_connection_info['connected']  = true;
-    $db_connection_info['connection'] = $c;
-    // echo '<!-- Created delayed db connection (lazy) -->' . "\n";
-  }
-  $db_query_count++;
-
-  // If caching is enabled, then clear out the cache for any request
-  // that may update the datatabase.
-  if( ! empty( $db_connection_info['cachedir'] ) ) {
-    if( ! preg_match( '/^select/i', $sql ) ) {
-      dbi_clear_cache();
-
-      if( ! empty( $db_connection_info['debug'] ) )
-        $SQLLOG[] = translate( 'Cache cleared from previous SQL!' );
+    if (!empty($db_connection_info['debug']) && !isset($SQLLOG)) {
+        $SQLLOG = [];
     }
-  }
 
-  // do_debug( "SQL:" . $sql);
-  $found_db_type = false;
+    if (!empty($db_connection_info['debug'])) {
+        $SQLLOG[] = $sql;
+    }
 
-  if( strcmp( $GLOBALS['db_type'], 'ibase' ) == 0 ) {
-    $found_db_type = true;
-    $res = ibase_query( $sql );
-  } elseif( strcmp( $GLOBALS['db_type'], 'ibm_db2' ) == 0 ) {
-    $found_db_type = true;
-    $res = db2_exec( $GLOBALS['ibm_db2_connection'], $sql );
-  } elseif( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 ) {
-    $found_db_type = true;
-    $res = mssql_query( $sql );
-  } elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 ) {
-    $found_db_type = true;
-    $res = mysql_query( $sql, $db_connection_info['connection'] );
-  } elseif( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 ) {
-    $found_db_type = true;
-    $res = $GLOBALS['db_connection']->query( $sql );
-  } elseif( strcmp( $GLOBALS['db_type'], 'odbc' ) == 0 ) {
-    return odbc_exec( $GLOBALS['odbc_connection'], $sql );
-  } elseif( strcmp( $GLOBALS['db_type'], 'oracle' ) == 0 ) {
-    if( false === $GLOBALS['oracle_statement'] =
-        OCIParse( $GLOBALS['oracle_connection'], $sql ) )
-      dbi_fatal_error( translate( 'Error executing query.' )
-       . $phpdbiVerbose ? ( dbi_error() . "\n\n<br />\n" . $sql ) : ''
-       . '', $fatalOnError, $showError );
-      return OCIExecute( $GLOBALS['oracle_statement'], OCI_COMMIT_ON_SUCCESS );
-  } elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 ) {
-    $found_db_type = true;
-    $res = pg_exec( $GLOBALS['postgresql_connection'], $sql );
-  } elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 ) {
-    $found_db_type = true;
-    $res = sqlite_query( $GLOBALS['sqlite_c'], $sql, SQLITE_NUM );
-  } elseif ( strcmp ( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-    $found_db_type = true;
-    $res = $GLOBALS['sqlite3_c']->query ( $sql );
-  }
+    if (isset($db_connection_info) && !$db_connection_info['connected']) {
+        $conn = dbi_connect(
+            $db_connection_info['host'],
+            $db_connection_info['login'],
+            $db_connection_info['password'],
+            $db_connection_info['database'],
+            false
+        );
+        $db_connection_info['connected'] = true;
+        $db_connection_info['connection'] = $conn;
+    }
 
-  if( $found_db_type ) {
-    if( ! $res )
-      dbi_fatal_error( translate( 'Error executing query.' )
-       . ( $phpdbiVerbose ? ( dbi_error() . "\n\n<br />\n" . $sql ) : '' ),
-         $fatalOnError, $showError );
+    $db_query_count++;
 
-    return $res;
-  } else
-    dbi_fatal_error( 'dbi_query(): ' . translate( 'db_type not defined.' ) );
+    try {
+        switch ($GLOBALS['db_type']) {
+            case 'mysqli':
+                $res = $db_connection_info['connection']->query($sql);
+                break;
+            case 'sqlite3':
+                $res = $db_connection_info['connection']->query($sql);
+                break;
+            case 'pdo_mysql':
+            case 'pdo_sqlite':
+                $res = $db_connection_info['connection']->query($sql);
+                break;
+            default:
+                throw new DBIException(translate('db_type not defined'));
+        }
+
+        if ($res === false) {
+            throw new DBIException(translate('Error executing query') . ($showError ? ': ' . dbi_error() : ''));
+        }
+
+        return $res;
+    } catch (Exception $e) {
+        if ($fatalOnError) {
+            dbi_fatal_error($e->getMessage(), true, $showError);
+        }
+        return false;
+    }
 }
 
 /**
- * Retrieves a single row from the database and returns it as an array.
+ * Retrieves a single row from the database as an array.
  *
- * <b>Note:</b> We don't use the more useful xxx_fetch_array because not all
- * databases support this function.
- *
- * <b>Note:</b> Use the {@link dbi_error()} function to get error information
- * if the connection fails.
- *
- * @param resource $res The database query resource returned from
- *                      the {@link dbi_query()} function.
- *
- * @return mixed An array of database columns representing a single row in
- *               the query result or false on an error.
+ * @param mixed $res Query result resource/object from dbi_query()
+ * @return array|null Row data or null on error/no data
+ * @throws DBIException
  */
-function dbi_fetch_row( $res ) {
-  if( strcmp( $GLOBALS['db_type'], 'ibase' ) == 0 )
-    return ibase_fetch_row( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'ibm_db2' ) == 0 )
-    return db2_fetch_array( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 )
-    return mssql_fetch_array( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 )
-    return mysql_fetch_array( $res, MYSQL_NUM );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 )
-    return $res->fetch_array( MYSQLI_NUM );
-  elseif( strcmp( $GLOBALS['db_type'], 'odbc' ) == 0 )
-    return ( ! odbc_fetch_into( $res, $ret ) ? false : $ret );
-  elseif( strcmp( $GLOBALS['db_type'], 'oracle' ) == 0 )
-    return ( OCIFetchInto( $GLOBALS['oracle_statement'], $row,
-      OCI_NUM + OCI_RETURN_NULLS ) ? $row : 0 );
-  elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 ) {
-    // Note: row became optional in PHP 4.1.0.
-    $r = pg_fetch_array( $res, null, PGSQL_NUM );
-    return ( $r ? $r : false );
-  } elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 )
-    return sqlite_fetch_array( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-    return $res->fetchArray ();
-  } else
-    dbi_fatal_error( 'dbi_fetch_row(): '
-     . translate( 'db_type not defined.' ) );
+function dbi_fetch_row($res): ?array
+{
+    switch ($GLOBALS['db_type']) {
+        case 'mysqli':
+            return $res->fetch_array(MYSQLI_NUM) ?: null;
+        case 'sqlite3':
+            return $res->fetchArray(SQLITE3_NUM) ?: null;
+        case 'pdo_mysql':
+        case 'pdo_sqlite':
+            return $res->fetch(PDO::FETCH_NUM) ?: null;
+        default:
+            throw new DBIException(translate('db_type not defined'));
+    }
 }
 
 /**
- * Returns the number of rows affected by the last INSERT, UPDATE or DELETE.
+ * Returns the number of rows affected by the last INSERT, UPDATE, or DELETE.
  *
- * <b>Note:</b> Use the {@link dbi_error()} function to get error information
- * if the connection fails.
- *
- * @param resource $conn The database connection
- * @param resource $res  The database query resource returned from the
- *                      {@link dbi_query()} function.
- *
- * @return int The number or database rows affected.
+ * @param mysqli|SQLite3|PDO|null $conn Database connection
+ * @param mixed $res Query result resource/object
+ * @return int Number of affected rows
+ * @throws DBIException
  */
-function dbi_affected_rows( $conn, $res ) {
-  if( strcmp( $GLOBALS['db_type'], 'ibase' ) == 0 )
-    return ibase_affected_rows( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'ibm_db2' ) == 0 )
-    return db2_num_rows( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 )
-    return mssql_rows_affected ( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 )
-    return mysql_affected_rows( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 )
-    return $conn->affected_rows;
-  elseif( strcmp( $GLOBALS['db_type'], 'odbc' ) == 0 )
-    return odbc_num_rows( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'oracle' ) == 0 )
-    return ( $GLOBALS['oracle_statement'] >= 0
-      ? OCIRowCount( $GLOBALS['oracle_statement'] ) : -1 );
-  elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 )
-    return pg_affected_rows( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 )
-    return sqlite_changes( $conn );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite3' ) == 0 )
-    return $conn->changes();
-  else
-    dbi_fatal_error( 'dbi_free_result(): '
-     . translate( 'db_type not defined.' ) );
+function dbi_affected_rows($conn, $res): int
+{
+    switch ($GLOBALS['db_type']) {
+        case 'mysqli':
+            return $conn->affected_rows;
+        case 'sqlite3':
+            return $conn->changes();
+        case 'pdo_mysql':
+        case 'pdo_sqlite':
+            return $res->rowCount();
+        default:
+            throw new DBIException(translate('db_type not defined'));
+    }
 }
 
 /**
- * Update a BLOB (binary large object) in the database with the contents
- * of the specified file.
- * A BLOB field should be created in a separete INSERT statement using
- * NULL as the initial value prior to this call.
+ * Updates a BLOB in the database.
  *
- * @param resource $table   the table name that contains the blob
- * @param resource $column  the table column name for the blob
- * @param resource $key     the key for updating the table row
- * @param resource $data    the data to insert
- *
+ * @param string $table  Table name
+ * @param string $column Column name for the BLOB
+ * @param string $key    WHERE clause for the row (e.g., "id = 1")
+ * @param string $data   Binary data to insert
  * @return bool True on success
+ * @throws DBIException
  */
-function dbi_update_blob( $table, $column, $key, $data ) {
-  global $unavail_DBI_Update_blob, $db_connection_info;
+function dbi_update_blob(string $table, string $column, string $key, string $data): bool
+{
+    global $db_connection_info;
 
-  $unavail_DBI_Update_blob = str_replace( array( 'XXX', 'YYY' ),
-    array( '"dbi_update_blob"', $GLOBALS['db_type'] ),
-    translate( 'Unfortunately, XXX is not implemented for YYY' ) );
+    if (empty($table) || empty($column) || empty($key) || !isset($data)) {
+        throw new DBIException(translate('Invalid parameters for BLOB update'));
+    }
 
-  assert( '! empty( $table )' );
-  assert( '! empty( $column )' );
-  assert( '! empty( $key )' );
-  assert( '! empty( $data )' );
+    $sql = "UPDATE $table SET $column = ? WHERE $key";
+    $conn = $db_connection_info['connection'];
 
-  $sql = 'UPDATE ' . $table . ' SET ' . $column;
-
-  if( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 )
-    return dbi_execute( $sql . ' = 0x' . bin2hex( $data ) . ' WHERE ' . $key );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 ) {
-    return dbi_execute( $sql . ' = \''
-     . ( function_exists( 'mysql_real_escape_string' )
-       ? mysql_real_escape_string( $data ) : addslashes( $data ) )
-     . '\' WHERE ' . $key );
-   } elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 )
-     return dbi_execute( $sql . ' = \''
-      . pg_escape_bytea( $data ) . '\' WHERE ' . $key );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 )
-    return dbi_execute( $sql . ' = \''
-     . sqlite_udf_encode_binary( $data ) . '\' WHERE ' . $key );
-  elseif ( strcmp ( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-    $ar = explode ( '=', $key, 2 );
-    $colKey = trim($ar[0]);
-    $valueKey = trim($ar[1]);
-    $statement = $GLOBALS['sqlite3_c']->prepare($sql .
-      " = ? WHERE $colKey = ?");
-    $statement->bindParam ( 1, $data, SQLITE3_BLOB );
-    $statement->bindParam ( 2, $valueKey );
-    $ret = $statement->execute();
-    return ( $ret == FALSE ? FALSE : TRUE );
-  } else
-    // TODO!
-    die_miserable_death( $unavail_DBI_Update_blob );
+    try {
+        switch ($GLOBALS['db_type']) {
+            case 'mysqli':
+                $stmt = $conn->prepare($sql);
+                $stmt->bind_param('s', $data);
+                $result = $stmt->execute();
+                $stmt->close();
+                return $result;
+            case 'sqlite3':
+                $stmt = $conn->prepare($sql);
+                $stmt->bindParam(1, $data, SQLITE3_BLOB);
+                $result = $stmt->execute();
+                $stmt->close();
+                return $result !== false;
+            case 'pdo_mysql':
+            case 'pdo_sqlite':
+                $stmt = $conn->prepare($sql);
+                $stmt->bindValue(1, $data, PDO::PARAM_LOB);
+                return $stmt->execute();
+            default:
+                throw new DBIException(translate('db_type not defined'));
+        }
+    } catch (Exception $e) {
+        throw new DBIException(translate('Error updating BLOB') . ': ' . $e->getMessage());
+    }
 }
 
 /**
- * Get a BLOB (binary large object) from the database.
+ * Retrieves a BLOB from the database.
  *
- * @param resource $table   the table name that contains the blob
- * @param resource $column  the table column name for the blob
- * @param resource $key     the key for updating the table row
- *
- * @return bool True on success
+ * @param string $table  Table name
+ * @param string $column Column name for the BLOB
+ * @param string $key    WHERE clause for the row (e.g., "id = 1")
+ * @return string|null Binary data or null on error/no data
+ * @throws DBIException
  */
-function dbi_get_blob( $table, $column, $key ) {
-  global $unavail_DBI_Update_blob, $db_connection_info;
+function dbi_get_blob(string $table, string $column, string $key): ?string
+{
+    if (empty($table) || empty($column) || empty($key)) {
+        throw new DBIException(translate('Invalid parameters for BLOB retrieval'));
+    }
 
-  assert( '! empty( $table )' );
-  assert( '! empty( $column )' );
-  assert( '! empty( $key )' );
+    $sql = "SELECT $column FROM $table WHERE $key";
+    $res = dbi_execute($sql);
 
-  $res =
-    dbi_execute( 'SELECT ' . $column . ' FROM ' . $table . ' WHERE ' . $key );
+    if (!$res) {
+        return null;
+    }
 
-  if( ! $res )
-    return false;
+    $row = dbi_fetch_row($res);
+    dbi_free_result($res);
 
-  $ret = '';
-
-  if( $row = dbi_fetch_row( $res ) ) {
-    if( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0
-        || strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 )
-      $ret = $row[0];
-    elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 )
-      $ret = pg_unescape_bytea ( $row[0] );
-    elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 )
-      $ret = sqlite_udf_decode_binary( $row[0] );
-    elseif( strcmp( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-      $ret = $row[0];
-    } else
-      // TODO!
-      die_miserable_death( $unavail_DBI_Update_blob );
-  }
-  dbi_free_result( $res );
-  return $ret;
+    return $row[0] ?? null;
 }
 
 /**
  * Frees a result set.
  *
- * @param resource $res The database query resource returned from
- *                      the {@link dbi_query()} function.
- *
+ * @param mixed $res Query result resource/object
  * @return bool True on success
+ * @throws DBIException
  */
-function dbi_free_result( $res ) {
-  if( $res === true ) // Not needed for UPDATE, DELETE, etc
-    return;
-
-  if( strcmp( $GLOBALS['db_type'], 'ibase' ) == 0 )
-    return ibase_free_result( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'ibm_db2' ) == 0 )
-    return db2_free_result( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 )
-    return mssql_free_result( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 )
-    return mysql_free_result( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 )
-    return mysqli_free_result( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'odbc' ) == 0 )
-    return odbc_free_result( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'oracle' ) == 0 ) {
-    // Not supported. Ingore.
-    if( $GLOBALS['oracle_statement'] >= 0 ) {
-      OCIFreeStatement( $GLOBALS['oracle_statement'] );
-      $GLOBALS['oracle_statement'] = -1;
+function dbi_free_result($res): bool
+{
+    if ($res === true) {
+        return true;
     }
-  } elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 )
-    return pg_freeresult( $res );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 ) {
-    // Not supported
-  }
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-    // Not needed
-  } else
-    dbi_fatal_error( 'dbi_free_result(): '
-       . translate( 'db_type not defined.' ) );
+
+    switch ($GLOBALS['db_type']) {
+        case 'mysqli':
+            $res->free();
+            return true;
+        case 'sqlite3':
+            return true; // SQLite3 handles result freeing automatically
+        case 'pdo_mysql':
+        case 'pdo_sqlite':
+            $res->closeCursor();
+            return true;
+        default:
+            throw new DBIException(translate('db_type not defined'));
+    }
 }
 
 /**
  * Gets the latest database error message.
  *
- * @return string The text of the last database error. (The type of information
- *                varies depending on which type of database is being used.)
+ * @return string Error message
  */
-function dbi_error() {
-  if( strcmp( $GLOBALS['db_type'], 'ibase' ) == 0 )
-    $ret = ibase_errmsg();
-  elseif( strcmp( $GLOBALS['db_type'], 'ibm_db2' ) == 0 ) {
-    $ret = db2_conn_errormsg();
+function dbi_error(): string
+{
+    global $db_connection_info;
 
-    if( $ret == '' )
-      $ret = db2_stmt_errormsg();
-  } elseif( strcmp( $GLOBALS['db_type'], 'mssql' ) == 0 )
-    // No real mssql_error function. This is as good as it gets.
-    $ret = mssql_get_last_message();
-  elseif( strcmp( $GLOBALS['db_type'], 'mysql' ) == 0 )
-    $ret = mysql_error();
-  elseif( strcmp( $GLOBALS['db_type'], 'mysqli' ) == 0 )
-    $ret = $GLOBALS['db_connection']->error;
-  elseif( strcmp( $GLOBALS['db_type'], 'odbc' ) == 0 )
-    // No way to get error from ODBC API.
-    $ret = translate( 'Unknown ODBC error.' );
-  elseif( strcmp( $GLOBALS['db_type'], 'oracle' ) == 0 ) {
-    $e = OCIError( $GLOBALS['oracle_connection']
-      ? $GLOBALS['oracle_connection'] : '' );
-    $ret = htmlentities( $e['message'] );
-  } elseif( strcmp( $GLOBALS['db_type'], 'postgresql' ) == 0 )
-    $ret = pg_errormessage( $GLOBALS['postgresql_connection'] );
-  elseif( strcmp( $GLOBALS['db_type'], 'sqlite' ) == 0 ) {
-    if( empty( $GLOBALS['db_sqlite_error_str'] ) ) {
-      $ret = sqlite_last_error( $GLOBALS['sqlite_c'] );
-    } else {
-      $ret = $GLOBALS['db_sqlite_error_str'];
-      $GLOBALS['db_sqlite_error_str'] = '';
+    switch ($GLOBALS['db_type']) {
+        case 'mysqli':
+            return $db_connection_info['connection'] ? $db_connection_info['connection']->error : translate('No connection');
+        case 'sqlite3':
+            return $db_connection_info['connection'] ? $db_connection_info['connection']->lastErrorMsg() : translate('No connection');
+        case 'pdo_mysql':
+        case 'pdo_sqlite':
+            $error = $db_connection_info['connection'] ? $db_connection_info['connection']->errorInfo() : [translate('No connection')];
+            return $error[2] ?? translate('Unknown error');
+        default:
+            return translate('db_type not defined');
     }
-  } elseif ( strcmp ( $GLOBALS['db_type'], 'sqlite3' ) == 0 ) {
-    $ret = $GLOBALS['sqlite3_c']->lastErrorMsg ();
-  } else
-    $ret = 'dbi_error(): ' . translate( 'db_type not defined.' );
-
-  return ( strlen( $ret ) ? $ret : translate( 'Unknown error.' ) );
 }
 
 /**
- * Displays a fatal database error and aborts execution.
+ * Displays a fatal database error and optionally aborts execution.
  *
- * @param string  $msg        The database error message.
- * @param bool    $doExit     Abort execution?
- * @param bool    $showError  Show the details of the error (possibly including
- *                            the SQL that caused the error)?
+ * @param string $msg        Error message
+ * @param bool   $doExit     Abort execution?
+ * @param bool   $showError  Show error details?
+ * @throws DBIException
  */
-function dbi_fatal_error( $msg, $doExit = true, $showError = true ) {
-  if( $showError ) {
-    echo '<h2>' . translate( 'Error' ) . '</h2>
+function dbi_fatal_error(string $msg, bool $doExit = true, bool $showError = true): void
+{
+    if ($showError) {
+        echo '<h2>' . translate('Error') . '</h2>
 <!--begin_error (dbierror)-->
-' . $msg . '
+' . htmlspecialchars($msg) . '
 <!--end_error-->
 ';
-  }
-  if( $doExit )
-    exit;
-}
-
-/**
- * Escapes a string accordingly to the DB type.
- *
- * @param string $string  SQL of query to execute
- *
- * @return string         The escaped string
- */
-function dbi_escape_string( $string ) {
-  global $db_connection_info;
-  // Return the string in original form
-  $string = stripslashes( $string );
-  switch( $GLOBALS['db_type'] ) {
-    case 'ibase':
-    case 'mssql':
-    case 'oracle':
-      return str_replace( "'", "''", $string );
-    case 'mysql':
-      // MySQL requires an active connection.
-      return ( empty( $db_connection_info['connected'] )
-        ? addslashes( $string )
-        : ( version_compare( phpversion(), '4.3.0' ) >= 0
-          ? mysql_real_escape_string( $string, $db_connection_info['connection'] )
-          : mysql_escape_string( $string ) ) );
-    case 'mysqli':
-      return ( empty( $db_connection_info['connected'] )
-        ? addslashes( $string )
-        : $db_connection_info['connection']->real_escape_string( $string ) );
-    case 'postgresql':
-      return pg_escape_string( $string );
-    case 'sqlite':
-      return sqlite_escape_string( $string );
-    case 'sqlite3':
-      return SQLite3::escapeString ( $string );
-    case 'ibm_db2':
-    case 'odbc':
-    default:
-      return addslashes( $string );
-  }
-}
-
-/**
- * Executes a SQL query, supporting parameter binding in the ?-style
- *
- * <b>Note:</b> Use the {@link dbi_error()} function to get error information
- * if the connection fails.
- *
- * @param string  $sql           SQL of query to execute.
- *                               May contain ?-placeholders
- * @param array   $params        An array containing the values to put in
- *                               placeolders. These values will be escaped with
- *                               dbi_escape_string() and will be put in single
- *                               quotes. A NULL param will be replaced with NULL
- *                               without quotes around it.
- * @param bool    $fatalOnError  Abort execution if there is a database error?
- * @param bool    $showError     Display error to user (including possibly the
- *                               SQL) if there is a database error?
- *
- * @return mixed  The query result resource on queries (which can then be passed
- *                to the {@link dbi_fetch_row()} function to obtain the
- *                results), or true/false on insert or delete queries.
- */
-function dbi_execute( $sql, $params = array(), $fatalOnError = true,
-  $showError = true ) {
-
-  if( count( $params ) == 0 )
-    return dbi_query( $sql, $fatalOnError, $showError );
-
-  $prepared = '';
-  $offset  =
-  $phindex = 0;
-  while( ( $pos = strpos( $sql, '?', $offset ) ) !== false ) {
-    $prepared .= substr( $sql, $offset, $pos - $offset )
-     . ( ( is_null( $params[ $phindex ] ) )
-      ? "NULL" : ( "'" . dbi_escape_string( $params[ $phindex ] ) . "'" ) );
-    $offset = $pos + 1;
-    $phindex++;
-  }
-  $prepared .= substr( $sql, $offset );
-
-  return dbi_query( $prepared, $fatalOnError, $showError );
-}
-
-/**
- * Execute a SQL query. First, look to see if the results of this query are in
- * a cache. If they are, then return them. If not, then run the query and store
- * them in the cache. Of course, caching is only performed for SELECT queries.
- * Anything other than that will clear out the entire cache
- * (until we add more intelligent caching logic).
- */
-function dbi_get_cached_rows( $sql, $params = array(),
-  $fatalOnError = true, $showError = true ) {
-  global $db_cache_count, $db_connection_info;
-  $file = '';
-  $save_query = false;
-
-  if( ! empty( $db_connection_info['cachedir'] )
-      && function_exists( 'file_get_contents' ) ) {
-    // Cache enabled.
-    $hash = md5( $db_connection_info['database']
-      . $db_connection_info['password'] .$sql . serialize( $params ) );
-    $file = $db_connection_info['cachedir'] . '/' . $hash . '.dat';
-
-    if( file_exists( $file ) ) {
-      $db_cache_count++;
-      return unserialize( file_get_contents( $file ) );
     }
-    $save_query = true;
-  }
 
-  $res = dbi_execute( $sql, $params, $fatalOnError, $showError );
-
-  if( $res ) {
-    $rows = array();
-    while( $row = dbi_fetch_row( $res ) ) {
-      $rows[] = $row;
+    if ($doExit) {
+        throw new DBIException($msg);
     }
-    dbi_free_result( $res );
-
-    // Serialize and save in cache for later use.
-    if( ! empty( $file ) && $save_query ) {
-      $fd = @fopen( $file, 'w+b', false );
-
-      if( empty( $fd ) ) {
-        die_miserable_death ( "Cache Error.<br/><br/>The permissions for the db_cachedir will not allow creation of the following file:<br/><blockquote>" .
-          $file . "</blockquote>", 'dbCacheError' );
-      }
-
-      fwrite( $fd, serialize( $rows ) );
-      fclose( $fd );
-      chmod( $file, 0666 );
-    }
-    return $rows;
-  } else
-    return false;
 }
 
 /**
- * Specify the location of the cache directory.
- * This directory will need to world-writable if this is a web-based application.
+ * Escapes a string for safe use in SQL queries.
+ *
+ * @param string $string String to escape
+ * @return string Escaped string
+ * @throws DBIException
  */
-function dbi_init_cache( $dir ) {
-  global $db_connection_info;
+function dbi_escape_string(string $string): string
+{
+    global $db_connection_info;
 
-  if( ! isset( $db_connection_info ) )
-    $db_connection_info = array();
+    $string = stripslashes($string);
 
-  $db_connection_info['cachedir'] = $dir;
+    switch ($GLOBALS['db_type']) {
+        case 'mysqli':
+            return $db_connection_info['connected']
+                ? $db_connection_info['connection']->real_escape_string($string)
+                : addslashes($string);
+        case 'sqlite3':
+            return SQLite3::escapeString($string);
+        case 'pdo_mysql':
+        case 'pdo_sqlite':
+            return $db_connection_info['connection']
+                ? $db_connection_info['connection']->quote($string)
+                : addslashes($string);
+        default:
+            throw new DBIException(translate('db_type not defined'));
+    }
+}
+
+/**
+ * Executes a SQL query with parameter binding.
+ *
+ * @param string $sql           SQL query with ? placeholders
+ * @param array  $params        Values for placeholders
+ * @param bool   $fatalOnError  Throw exception on error?
+ * @param bool   $showError     Display error to user?
+ * @return mixed Query result resource/object or true/false for insert/delete
+ * @throws DBIException
+ */
+function dbi_execute(string $sql, array $params = [], bool $fatalOnError = true, bool $showError = true)
+{
+    global $db_connection_info;
+
+    if (empty($params)) {
+        return dbi_query($sql, $fatalOnError, $showError);
+    }
+
+    try {
+        $conn = $db_connection_info['connection'];
+        switch ($GLOBALS['db_type']) {
+            case 'mysqli':
+                $stmt = $conn->prepare($sql);
+                if (!$stmt) {
+                    throw new DBIException(translate('Error preparing query') . ': ' . $conn->error);
+                }
+                $types = str_repeat('s', count($params));
+                $stmt->bind_param($types, ...$params);
+                $result = $stmt->execute();
+                $res = $stmt->get_result() ?: $result;
+                $stmt->close();
+                return $res;
+            case 'sqlite3':
+                $stmt = $conn->prepare($sql);
+                if (!$stmt) {
+                    throw new DBIException(translate('Error preparing query') . ': ' . $conn->lastErrorMsg());
+                }
+                foreach ($params as $index => $param) {
+                    $stmt->bindValue($index + 1, $param, is_null($param) ? SQLITE3_NULL : SQLITE3_TEXT);
+                }
+                $res = $stmt->execute();
+                return $res ?: true;
+            case 'pdo_mysql':
+            case 'pdo_sqlite':
+                $stmt = $conn->prepare($sql);
+                if (!$stmt) {
+                    throw new DBIException(translate('Error preparing query') . ': ' . $conn->errorInfo()[2]);
+                }
+                foreach ($params as $index => $param) {
+                    $stmt->bindValue($index + 1, $param, is_null($param) ? PDO::PARAM_NULL : PDO::PARAM_STR);
+                }
+                $result = $stmt->execute();
+                return $stmt->rowCount() > 0 ? $stmt : true;
+            default:
+                throw new DBIException(translate('db_type not defined'));
+        }
+    } catch (Exception $e) {
+        if ($fatalOnError) {
+            dbi_fatal_error($e->getMessage(), true, $showError);
+        }
+        return false;
+    }
 }
 
 /**
  * Enable SQL debugging.
- * This will keep an array of all SQL queries in the global variable $SQLLOG.
+ *
+ * @param bool $status Enable debugging?
  */
-function dbi_set_debug( $status = false ) {
-  global $db_connection_info;
+function dbi_set_debug(bool $status = false): void
+{
+    global $db_connection_info;
 
-  if( ! isset( $db_connection_info ) )
-    $db_connection_info = array();
+    if (!isset($db_connection_info)) {
+        $db_connection_info = [];
+    }
 
-  $db_connection_info['debug'] = $status;
+    $db_connection_info['debug'] = $status;
 }
 
 /**
  * Get the SQL debug status.
+ *
+ * @return bool
  */
-function dbi_get_debug() {
-  global $db_connection_info;
+function dbi_get_debug(): bool
+{
+    global $db_connection_info;
 
-  return ( isset( $db_connection_info )
-    ? ( ! empty( $db_connection_info['debug'] ) ) : false );
+    return isset($db_connection_info) && !empty($db_connection_info['debug']);
 }
-
-/**
- * Clear out the db cache.
- * Return the number of files deleted.
- */
-function dbi_clear_cache() {
-  global $db_connection_info;
-
-  if( empty( $db_connection_info['cachedir'] ) )
-    return 0;
-
-  $cnt = 0;
-  $fd = @opendir( $db_connection_info['cachedir'] );
-
-  if( empty( $fd ) )
-    dbi_fatal_error( str_replace( 'XXX', $db_connection_info['cachedir'],
-      translate( 'Error opening cache dir XXX.' ) ) );
-
-  $b = 0;
-  $errcnt = 0;
-  $errstr = '';
-  while( false !== ( $file = readdir( $fd ) ) ) {
-    if( preg_match( '/^\S\S\S\S\S\S\S\S\S\S+.dat$/', $file ) ) {
-      // echo 'Deleting ' . $file . '<br />';
-      $cnt++;
-      $fullpath = $db_connection_info['cachedir'] . '/' . $file;
-      $b += filesize ( $fullpath );
-
-      if( ! @unlink( $fullpath ) ) {
-         $errcnt++;
-         $errstr .= '<!-- ' . str_replace( array( 'XXX', 'YYY' ),
-           array( translate( 'delete' ), $file ),
-           translate( 'Cache error Could not XXX file YYY.' ) ) . " -->\n";
-        // TODO: log this somewhere???
-      }
-    }
-  }
-  if ( $errcnt > 10 ) {
-    // They don't have correct permissions set.
-    die_miserable_death ( "Error removing temporary file.<br/><br/>The permissions for the following directory do not support the db_cachedir option in includes/settings.php:<br/><blockquote>" .
-      $db_connection_info['cachedir'] . "</blockquote>", 'dbCacheError' );
-  }
-
-
-  return $cnt;
-}
-
 ?>

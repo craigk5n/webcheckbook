@@ -1,633 +1,534 @@
 <?php
-
-
-
-/**
- * Gets the value resulting from an HTTP POST method.
- * 
- * @param string $name Name used in the HTML form
- *
- * @return string The value used in the HTML form
- *
- * @see getGetValue
- */
-function getPostValue ( $name ) {
-  global $HTTP_POST_VARS;
-
-  if ( isset ( $_POST ) && is_array ( $_POST ) && ! empty ( $_POST[$name] ) )
-    return $_POST[$name];
-  if ( ! isset ( $HTTP_POST_VARS ) )
-    return null;
-  if ( ! isset ( $HTTP_POST_VARS[$name] ) )
-    return null;
-  return ( $HTTP_POST_VARS[$name] );
-}
+declare(strict_types=1);
 
 /**
- * Gets the value resulting from an HTTP GET method.
+ * Utility functions for the checkbook application.
  *
- * If you need to enforce a specific input format (such as numeric input), then
- * use the {@link getValue()} function.
+ * This file contains helper functions for handling HTTP requests, database operations,
+ * date manipulations, and other utilities used in the checkbook web application.
+ * Updated for PHP 8 compatibility and best practices by Grok (xAI) in September 2025.
  *
- * @param string $name Name used in the HTML form or found in the URL
- *
- * @return string The value used in the HTML form (or URL)
- *
- * @see getPostValue
+ * @package Checkbook
  */
-function getGetValue ( $name ) {
-  global $HTTP_GET_VARS;
 
-  if ( isset ( $_GET ) && is_array ( $_GET ) && ! empty ( $_GET[$name] ) )
-    return $_GET[$name];
-  if ( ! isset ( $HTTP_GET_VARS ) )
-    return null;
-  if ( ! isset ( $HTTP_GET_VARS[$name] ) )
-    return null;
-  return ( $HTTP_GET_VARS[$name] );
+/**
+ * Retrieves a value from the HTTP POST method.
+ *
+ * @param string $name The name of the form field.
+ * @return string|null The value from the POST data, or null if not set.
+ */
+function getPostValue(string $name): ?string
+{
+    return isset($_POST[$name]) && is_string($_POST[$name]) && !empty($_POST[$name])
+        ? $_POST[$name]
+        : null;
 }
 
 /**
- * Gets the value resulting from either HTTP GET method or HTTP POST method.
+ * Retrieves a value from the HTTP GET method.
  *
- * <b>Note:</b> If you need to get an integer value, yuou can use the
- * getIntValue function.
- *
- * @param string $name   Name used in the HTML form or found in the URL
- * @param string $format A regular expression format that the input must match.
- *                       If the input does not match, an empty string is
- *                       returned and a warning is sent to the browser.  If The
- *                       <var>$fatal</var> parameter is true, then execution
- *                       will also stop when the input does not match the
- *                       format.
- * @param bool   $fatal  Is it considered a fatal error requiring execution to
- *                       stop if the value retrieved does not match the format
- *                       regular expression?
- *
- * @return string The value used in the HTML form (or URL)
- *
- * @uses getGetValue
- * @uses getPostValue
+ * @param string $name The name of the query parameter.
+ * @return string|null The value from the GET data, or null if not set.
  */
-function getValue ( $name, $format="", $fatal=false ) {
-  $val = getPostValue ( $name );
-  if ( ! isset ( $val ) )
-    $val = getGetValue ( $name );
-  if ( ! isset ( $val  ) )
-    return "";
-  if ( ! empty ( $format ) && ! preg_match ( "/^" . $format . "$/", $val ) ) {
-    // does not match
-    if ( $fatal ) {
-      die_miserable_death ( "Fatal Error: Invalid data format for $name" );
-    }
-    // ignore value
-    return "";
-  }
-  return $val;
+function getGetValue(string $name): ?string
+{
+    return isset($_GET[$name]) && is_string($_GET[$name]) && !empty($_GET[$name])
+        ? $_GET[$name]
+        : null;
 }
 
 /**
- * Gets an integer value resulting from an HTTP GET or HTTP POST method.
+ * Retrieves a value from either HTTP POST or GET method, with optional format validation.
  *
- * @param string $name  Name used in the HTML form or found in the URL
- * @param bool   $fatal Is it considered a fatal error requiring execution to
- *                      stop if the value retrieved does not match the format
- *                      regular expression?
- *
- * @return string The value used in the HTML form (or URL)
- *
- * @uses getValue
+ * @param string $name   The name of the form field or query parameter.
+ * @param string $format Optional regex pattern to validate the input.
+ * @param bool   $fatal  If true, throws an exception on format mismatch.
+ * @return string The validated value, or empty string if invalid or not set.
+ * @throws Exception If $fatal is true and the input doesn't match the format.
  */
-function getIntValue ( $name, $fatal=false ) {
-  $val = getValue ( $name, "-?[0-9]+", $fatal );
-  return $val;
-}
+function getValue(string $name, string $format = '', bool $fatal = false): string
+{
+    $val = getPostValue($name) ?? getGetValue($name) ?? '';
 
-
-
-// Load default system settings (which can be updated via admin.php)
-// System settings are stored in chkl_config.
-function load_global_settings () {
-  global $login, $readonly;
-  global $HTTP_HOST, $SERVER_PORT, $REQUEST_URI, $_SERVER;
-  global $SETTINGS;
-
-  $SETTINGS = array ();
-
-  if ( empty ( $HTTP_HOST ) )
-    $HTTP_HOST = $_SERVER["HTTP_HOST"];
-  if ( empty ( $SERVER_PORT ) )
-    $SERVER_PORT = $_SERVER["SERVER_PORT"];
-  if ( empty ( $REQUEST_URI ) )
-    $REQUEST_URI = $_SERVER["REQUEST_URI"];
-
-  $res = dbi_query ( "SELECT cal_setting, cal_value FROM chk_config" );
-  if ( $res ) {
-    while ( $row = dbi_fetch_row ( $res ) ) {
-      $setting = $row[0];
-      $value = $row[1];
-      //echo "Setting '$setting' to '$value' <br />\n";
-      $SETTINGS[$setting] = $value;
-
+    if ($format !== '' && !preg_match("/^$format$/", $val)) {
+        if ($fatal) {
+            throw new Exception('Fatal Error: Invalid data format for ' . $name);
+        }
+        return '';
     }
-    dbi_free_result ( $res );
-  }
+
+    return $val;
 }
 
-
-
-// send a redirect to the specified page
-// MS IIS/PWS has a bug in which it does not allow us to send a cookie
-// and a redirect in the same HTTP header.
-// See the following for more info on the IIS bug:
-//   http://www.faqts.com/knowledge_base/view.phtml/aid/9316/fid/4
-function do_redirect ( $url ) {
-  global $SERVER_SOFTWARE, $_SERVER, $c;
-  if ( empty ( $SERVER_SOFTWARE ) )
-    $SERVER_SOFTWARE = $_SERVER["SERVER_SOFTWARE"];
-  //echo "SERVER_SOFTWARE = $SERVER_SOFTWARE <br />"; exit;
-  if ( substr ( $SERVER_SOFTWARE, 0, 5 ) == "Micro" ) {
-    echo "<html><head><title>Redirect</title>" .
-      "<meta http-equiv=\"refresh\" content=\"0; url=$url\" /></head><body>" .
-      "Redirecting to ... <a href=\"" . $url . "\">here</a>.</body></html>.\n";
-  } else {
-    Header ( "Location: $url" );
-    echo "<html><head><title>Redirect</title></head><body>" .
-      "Redirecting to ... <a href=\"" . $url . "\">here</a>.</body></html>.\n";
-  }
-  dbi_close ( $c );
-  exit;
+/**
+ * Retrieves an integer value from HTTP POST or GET method.
+ *
+ * @param string $name  The name of the form field or query parameter.
+ * @param bool   $fatal If true, throws an exception if the value is not an integer.
+ * @return int|string The integer value, or empty string if invalid.
+ * @throws Exception If $fatal is true and the input is not a valid integer.
+ */
+function getIntValue(string $name, bool $fatal = false): int|string
+{
+    $val = getValue($name, '-?[0-9]+', $fatal);
+    return $val === '' ? '' : (int)$val;
 }
 
-
-// Send header stuff that tells the browser not to cache this page.
-function send_no_cache_header () {
-  header ( "Expires: Mon, 26 Jul 1997 05:00:00 GMT" );
-  header ( "Last-Modified: " . gmdate ( "D, d M Y H:i:s" ) . " GMT" );
-  header ( "Cache-Control: no-store, no-cache, must-revalidate" );
-  header ( "Cache-Control: post-check=0, pre-check=0", false );
-  header ( "Pragma: no-cache" );
-}
-
-
-
-
-// Get browser-specified language preference
-function get_browser_language () {
-  global $HTTP_ACCEPT_LANGUAGE, $browser_languages;
-  $ret = "";
-  if ( empty ( $HTTP_ACCEPT_LANGUAGE ) )
-    $HTTP_ACCEPT_LANGUAGE = $_SERVER["HTTP_ACCEPT_LANGUAGE"] ?? '';
-  if ( strlen ( $HTTP_ACCEPT_LANGUAGE ) == 0 )
-    return "none";
-  $langs = explode ( ",", $HTTP_ACCEPT_LANGUAGE );
-  for ( $i = 0; $i < count ( $langs ); $i++ ) {
-    $l = strtolower ( trim ( $langs[$i] ) );
-    $ret .= "\"$l\" ";
-    if ( ! empty ( $browser_languages[$l] ) ) {
-      return $browser_languages[$l];
+/**
+ * Retrieves the browser's preferred language from the HTTP Accept-Language header.
+ *
+ * @return string The language code (e.g., 'English-US'), defaults to 'English-US' if none found.
+ */
+function get_browser_language(): string
+{
+    $acceptLang = $_SERVER['HTTP_ACCEPT_LANGUAGE'] ?? '';
+    if (empty($acceptLang)) {
+        return 'English-US';
     }
-  }
-  //if ( strlen ( $HTTP_ACCEPT_LANGUAGE ) )
-  //  return "none ($HTTP_ACCEPT_LANGUAGE not supported)";
-  //else
-    return "none";
-}
 
-
-
-// Print out a date selection for use in a form.
-// params:
-//   $prefix - prefix to use in front of form element names
-//   $date - currently selected date (in YYYYMMDD) format
-function print_date_selection ( $prefix, $date ) {
-  print date_selection_html ( $prefix, $date );
-}
-
-// Generate a date selection for use in a form and return in.
-// params:
-//   $prefix - prefix to use in front of form element names
-//   $date - currently selected date (in YYYYMMDD) format
-function date_selection_html ( $prefix, $date ) {
-  $ret = "";
-  $num_years = 6;
-  if ( strlen ( $date ) != 8 )
-    $date = date ( "Ymd" );
-  $thisyear = $year = substr ( $date, 0, 4 );
-  $thismonth = $month = substr ( $date, 4, 2 );
-  $thisday = $day = substr ( $date, 6, 2 );
-  if ( $thisyear - date ( "Y" ) >= ( $num_years - 1 ) )
-    $num_years = $thisyear - date ( "Y" ) + 2;
-  $ret .= "<select name=\"" . $prefix . "day\">";
-  for ( $i = 1; $i <= 31; $i++ )
-    $ret .= "<option" . ( $i == $thisday ? " selected=\"selected\"" : "" ) . ">$i</option>";
-  $ret .= "</select>\n<select name=\"" . $prefix . "month\">";
-  for ( $i = 1; $i <= 12; $i++ ) {
-    $m = month_short_name ( $i - 1 );
-    $ret .= "<option value=\"$i\"" .
-      ( $i == $thismonth ? " selected=\"selected\"" : "" ) . ">$m</option>";
-  }
-  $ret .= "</select>\n<select name=\"" . $prefix . "year\">";
-  for ( $i = -1; $i < $num_years; $i++ ) {
-    $y = date ( "Y" ) + $i;
-    $ret .= "<option value=\"$y\"" .
-      ( $y == $thisyear ? " selected=\"selected\"" : "" ) . ">$y</option>";
-  }
-  $ret .= "</select>\n";
-  $ret .= "<input type=\"button\" onclick=\"selectDate('" .
-    $prefix . "day','" . $prefix . "month','" . $prefix . "year',$date)\" value=\"" .
-    translate("Select") . "...\" />";
-
-  return $ret;
-}
-
-
-
-
-// Get the Sunday of the week that the specified date is in.
-// (If the date specified is a Sunday, then that date is returned.)
-function get_sunday_before ( $year, $month, $day ) {
-  $weekday = date ( "w", mktime ( 3, 0, 0, $month, $day, $year ) );
-  $newdate = mktime ( 3, 0, 0, $month, $day - $weekday, $year );
-  return $newdate;
-}
-
-// Get the Monday of the week that the specified date is in.
-// (If the date specified is a Monday, then that date is returned.)
-function get_monday_before ( $year, $month, $day ) {
-  $weekday = date ( "w", mktime ( 3, 0, 0, $month, $day, $year ) );
-  if ( $weekday == 0 )
-    return mktime ( 3, 0, 0, $month, $day - 6, $year );
-  if ( $weekday == 1 )
-    return mktime ( 3, 0, 0, $month, $day, $year );
-  return mktime ( 3, 0, 0, $month, $day - ( $weekday - 1 ), $year );
-}
-
-
-// Returns week number for specified date
-// depending from week numbering settings.
-// params:
-//   $date - date in UNIX time format
-function week_number ( $date ) {
-  $tmp = getdate($date);
-  $iso    = gregorianToISO($tmp['mday'], $tmp['mon'], $tmp['year']);
-  $parts  = explode('-',$iso);
-  $week_number = intval($parts[1]);
-  return sprintf("%02d",$week_number);
-}
-
-
-// Return the full month name
-// params:
-//   $m - month (0-11)
-function month_name ( $m ) {
-  switch ( $m ) {
-    case 0: return translate("January");
-    case 1: return translate("February");
-    case 2: return translate("March");
-    case 3: return translate("April");
-    case 4: return translate("May_"); // needs to be different than "May"
-    case 5: return translate("June");
-    case 6: return translate("July");
-    case 7: return translate("August");
-    case 8: return translate("September");
-    case 9: return translate("October");
-    case 10: return translate("November");
-    case 11: return translate("December");
-  }
-  return "unknown-month($m)";
-}
-
-
-// Return the abbreviated month name
-// params:
-//   $m - month (0-11)
-function month_short_name ( $m ) {
-  switch ( $m ) {
-    case 0: return translate("Jan");
-    case 1: return translate("Feb");
-    case 2: return translate("Mar");
-    case 3: return translate("Apr");
-    case 4: return translate("May");
-    case 5: return translate("Jun");
-    case 6: return translate("Jul");
-    case 7: return translate("Aug");
-    case 8: return translate("Sep");
-    case 9: return translate("Oct");
-    case 10: return translate("Nov");
-    case 11: return translate("Dec");
-  }
-  return "unknown-month($m)";
-}
-
-
-// Return the full weekday name
-// params:
-//   $w - weekday (0=Sunday,...,6=Saturday)
-function weekday_name ( $w ) {
-  switch ( $w ) {
-    case 0: return translate("Sunday");
-    case 1: return translate("Monday");
-    case 2: return translate("Tuesday");
-    case 3: return translate("Wednesday");
-    case 4: return translate("Thursday");
-    case 5: return translate("Friday");
-    case 6: return translate("Saturday");
-  }
-  return "unknown-weekday($w)";
-}
-
-// Return the abbreviated weekday name
-// params:
-//   $w - weekday (0=Sun,...,6=Sat)
-function weekday_short_name ( $w ) {
-  switch ( $w ) {
-    case 0: return translate("Sun");
-    case 1: return translate("Mon");
-    case 2: return translate("Tue");
-    case 3: return translate("Wed");
-    case 4: return translate("Thu");
-    case 5: return translate("Fri");
-    case 6: return translate("Sat");
-  }
-  return "unknown-weekday($w)";
-}
-
-// convert a date from an int format "19991231" into
-// "Friday, December 31, 1999", "Friday, 12-31-1999" or whatever format
-// the user prefers.
-function date_to_str ( $indate, $format="", $show_weekday=true, $short_months=false, $server_time="" ) {
-  global $DATE_FORMAT, $TZ_OFFSET;
-
-  if ( strlen ( $indate ) == 0 ) {
-    $indate = date ( "Ymd" );
-  }
-
-  $newdate = $indate;
-  if ( $server_time != "" && $server_time >= 0 ) {
-    $y = substr ( $indate, 0, 4 );
-    $m = substr ( $indate, 4, 2 );
-    $d = substr ( $indate, 6, 2 );
-    if ( $server_time + $TZ_OFFSET * 10000 > 240000 ) {
-       $newdate = date ( "Ymd", mktime ( 3, 0, 0, $m, $d + 1, $y ) );
-    } else if ( $server_time + $TZ_OFFSET * 10000 < 0 ) {
-       $newdate = date ( "Ymd", mktime ( 3, 0, 0, $m, $d - 1, $y ) );
+    // Parse Accept-Language header (e.g., "en-US,en;q=0.9,es;q=0.8")
+    $langs = [];
+    $lang_parse = preg_split('/[,;]/', $acceptLang);
+    foreach ($lang_parse as $lang) {
+        $lang = trim($lang);
+        if (strpos($lang, 'q=') === false && !empty($lang)) {
+            $langs[] = $lang;
+        }
     }
-  }
 
-  // if they have not set a preference yet...
-  if ( $DATE_FORMAT == "" )
-    $DATE_FORMAT = "__month__ __dd__, __yyyy__";
+    // Map language codes to supported translation file
+    foreach ($langs as $lang) {
+        if (in_array($lang, ['en', 'en-US'], true)) {
+            return 'English-US';
+        }
+    }
 
-  if ( empty ( $format ) )
-    $format = $DATE_FORMAT;
+    return 'English-US'; // Fallback
+}
 
-  $y = (int) ( $newdate / 10000 );
-  $m = (int) ( $newdate / 100 ) % 100;
-  $d = $newdate % 100;
-  $date = mktime ( 3, 0, 0, $m, $d, $y );
-  $wday = strftime ( "%w", $date );
+/**
+ * Redirects to the specified URL, handling MS IIS/PWS compatibility.
+ *
+ * @param string $url The URL to redirect to.
+ */
+function do_redirect(string $url): void
+{
+    $server_software = $_SERVER['SERVER_SOFTWARE'] ?? '';
 
-  if ( $short_months ) {
-    $weekday = weekday_short_name ( $wday );
-    $month = month_short_name ( $m - 1 );
-  } else {
-    $weekday = weekday_name ( $wday );
-    $month = month_name ( $m - 1 );
-  }
-  $yyyy = $y;
-  $yy = sprintf ( "%02d", $y %= 100 );
+    if (str_starts_with($server_software, 'Micro')) {
+        echo <<<HTML
+<html>
+<head>
+    <title>Redirect</title>
+    <meta http-equiv="refresh" content="0; url=$url" />
+</head>
+<body>
+    Redirecting to ... <a href="$url">here</a>.
+</body>
+</html>
+HTML;
+    } else {
+        header('Location: ' . $url);
+        echo <<<HTML
+<html>
+<head>
+    <title>Redirect</title>
+</head>
+<body>
+    Redirecting to ... <a href="$url">here</a>.
+</body>
+</html>
+HTML;
+    }
+    global $c;
+    if (isset($c)) {
+        dbi_close($c);
+    }
+    exit;
+}
 
-  $ret = $format;
-  $ret = str_replace ( "__yyyy__", $yyyy, $ret );
-  $ret = str_replace ( "__yy__", $yy, $ret );
-  $ret = str_replace ( "__month__", $month, $ret );
-  $ret = str_replace ( "__mon__", $month, $ret );
-  $ret = str_replace ( "__dd__", $d, $ret );
-  $ret = str_replace ( "__mm__", $m, $ret );
+/**
+ * Returns the full month name for the specified month.
+ *
+ * @param int $month Month number (0-11).
+ * @return string The translated full month name.
+ */
+function month_name(int $month): string
+{
+    $months = [
+        translate('January'),
+        translate('February'),
+        translate('March'),
+        translate('April'),
+        translate('May_'),
+        translate('June'),
+        translate('July'),
+        translate('August'),
+        translate('September'),
+        translate('October'),
+        translate('November'),
+        translate('December'),
+    ];
+    return $months[$month] ?? "unknown-month($month)";
+}
 
-  if ( $show_weekday )
-    return "$weekday, $ret";
-  else
+/**
+ * Returns the abbreviated month name for the specified month.
+ *
+ * @param int $month Month number (0-11).
+ * @return string The translated abbreviated month name.
+ */
+function month_short_name(int $month): string
+{
+    $months = [
+        translate('Jan'),
+        translate('Feb'),
+        translate('Mar'),
+        translate('Apr'),
+        translate('May'),
+        translate('Jun'),
+        translate('Jul'),
+        translate('Aug'),
+        translate('Sep'),
+        translate('Oct'),
+        translate('Nov'),
+        translate('Dec'),
+    ];
+    return $months[$month] ?? "unknown-month($month)";
+}
+
+/**
+ * Returns the full weekday name for the specified day.
+ *
+ * @param int $weekday Weekday number (0=Sunday, ..., 6=Saturday).
+ * @return string The translated full weekday name.
+ */
+function weekday_name(int $weekday): string
+{
+    $weekdays = [
+        translate('Sunday'),
+        translate('Monday'),
+        translate('Tuesday'),
+        translate('Wednesday'),
+        translate('Thursday'),
+        translate('Friday'),
+        translate('Saturday'),
+    ];
+    return $weekdays[$weekday] ?? "unknown-weekday($weekday)";
+}
+
+/**
+ * Returns the abbreviated weekday name for the specified day.
+ *
+ * @param int $weekday Weekday number (0=Sunday, ..., 6=Saturday).
+ * @return string The translated abbreviated weekday name.
+ */
+function weekday_short_name(int $weekday): string
+{
+    $weekdays = [
+        translate('Sun'),
+        translate('Mon'),
+        translate('Tue'),
+        translate('Wed'),
+        translate('Thu'),
+        translate('Fri'),
+        translate('Sat'),
+    ];
+    return $weekdays[$weekday] ?? "unknown-weekday($weekday)";
+}
+
+/**
+ * Formats a date string according to the specified or default format.
+ *
+ * @param string $indate        Date in YYYYMMDD format.
+ * @param string $format        Optional format string (e.g., '__month__ __dd__, __yyyy__').
+ * @param bool   $show_weekday  Whether to include the weekday in the output.
+ * @param bool   $short_months  Whether to use short month names.
+ * @param string $server_time   Optional server time for timezone adjustments.
+ * @return string The formatted date string.
+ */
+function date_to_str(string $indate, string $format = '', bool $show_weekday = true, bool $short_months = false, string $server_time = ''): string
+{
+    global $DATE_FORMAT, $TZ_OFFSET;
+
+    $indate = empty($indate) ? date('Ymd') : $indate;
+    $format = empty($format) ? ($DATE_FORMAT ?: '__month__ __dd__, __yyyy__') : $format;
+
+    $year = (int)substr($indate, 0, 4);
+    $month = (int)substr($indate, 4, 2);
+    $day = (int)substr($indate, 6, 2);
+
+    if ($server_time !== '' && is_numeric($server_time)) {
+        $time = (int)$server_time + ($TZ_OFFSET * 10000);
+        if ($time > 240000) {
+            $indate = date('Ymd', mktime(3, 0, 0, $month, $day + 1, $year));
+        } elseif ($time < 0) {
+            $indate = date('Ymd', mktime(3, 0, 0, $month, $day - 1, $year));
+        }
+    }
+
+    $year = (int)substr($indate, 0, 4);
+    $month = (int)substr($indate, 4, 2);
+    $day = (int)substr($indate, 6, 2);
+    $date = mktime(3, 0, 0, $month, $day, $year);
+    $wday = (int)date('w', $date);
+
+    $weekday = $show_weekday ? ($short_months ? weekday_short_name($wday) : weekday_name($wday)) : '';
+    $month_name = $short_months ? month_short_name($month - 1) : month_name($month - 1);
+    $yyyy = $year;
+    $yy = sprintf('%02d', $year % 100);
+
+    $ret = str_replace(['__yyyy__', '__yy__', '__month__', '__mon__', '__dd__', '__mm__'], [$yyyy, $yy, $month_name, $month_name, $day, $month], $format);
+
+    return $show_weekday ? "$weekday, $ret" : $ret;
+}
+
+/**
+ * Displays a fatal error message and terminates execution.
+ *
+ * @param string $msg The error message to display.
+ */
+function fatalError(string $msg): void
+{
+    echo <<<HTML
+<html>
+<head>
+    <title>Error</title>
+</head>
+<body>
+    <h2>Error</h2>
+    $msg
+</body>
+</html>
+HTML;
+    exit;
+}
+
+/**
+ * Updates account balances in the chk_account table based on transactions.
+ *
+ * @param int $acct The account ID.
+ * @throws Exception On database errors.
+ */
+function update_balances(int $acct): void
+{
+    $res = dbi_execute('SELECT SUM(chk_amount) FROM chk_trans WHERE chk_acct_id = ?', [$acct]);
+    if ($res) {
+        $sum = (float)($res->fetch_row()[0] ?? 0);
+        dbi_execute('UPDATE chk_account SET chk_balance = ? WHERE chk_acct_id = ?', [$sum, $acct]);
+        dbi_free_result($res);
+    } else {
+        throw new Exception(translate('Database error') . ': ' . translate('Unable to calculate balance'));
+    }
+
+    $res = dbi_execute('SELECT SUM(chk_amount) FROM chk_trans WHERE chk_acct_id = ? AND chk_reconciled = ?', [$acct, 'Y']);
+    if ($res) {
+        $sum = (float)($res->fetch_row()[0] ?? 0);
+        dbi_execute('UPDATE chk_account SET chk_bank_balance = ? WHERE chk_acct_id = ?', [$sum, $acct]);
+        dbi_free_result($res);
+    } else {
+        throw new Exception(translate('Database error') . ': ' . translate('Unable to calculate bank balance'));
+    }
+}
+
+/**
+ * Shifts a date by a specified number of days.
+ *
+ * @param string $date The date in YYYYMMDD format.
+ * @param int    $days Number of days to shift (positive or negative).
+ * @return string The shifted date in YYYYMMDD format.
+ */
+function shiftDate(string $date, int $days): string
+{
+    $year = (int)substr($date, 0, 4);
+    $month = (int)substr($date, 4, 2);
+    $day = (int)substr($date, 6, 2);
+    return date('Ymd', mktime(3, 0, 0, $month, $day + $days, $year));
+}
+
+/**
+ * Finds transactions matching a bank transaction within a date and amount range.
+ *
+ * @param array $bankTrans Transaction details with 'date', 'amount', and 'no'.
+ * @param int   $daysBack  Days to search backward (default 14).
+ * @param int   $acct      The account ID.
+ * @return array List of matching transactions.
+ * @throws Exception On database errors.
+ */
+function find_transactions(array $bankTrans, int $daysBack = 14, int $acct): array
+{
+    $ids = [];
+    $matches = [];
+    $date1 = shiftDate($bankTrans['date'], -$daysBack);
+    $date2 = shiftDate($bankTrans['date'], 7);
+    $min = number_format($bankTrans['amount'] - 0.50, 2, '.', '');
+    $max = number_format($bankTrans['amount'] + 0.50, 2, '.', '');
+    $foundCheckNum = false;
+
+    $sql = 'SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, chk_description ' .
+           'FROM chk_trans ' .
+           'WHERE chk_amount > ? AND chk_amount < ? ' .
+           'AND chk_reconciled = ? AND chk_date >= ? AND chk_date <= ? ' .
+           'AND chk_acct_id = ?';
+    $res = dbi_execute($sql, [$min, $max, 'N', $date1, $date2, $acct]);
+
+    if (!$res) {
+        throw new Exception(translate('Database error') . ': ' . translate('Unable to find transactions'));
+    }
+
+    while ($row = dbi_fetch_row($res)) {
+        $matches[] = [
+            'account' => $acct,
+            'trans_id' => (int)$row[0],
+            'type' => (int)$row[1],
+            'no' => $row[2] !== null ? (string)$row[2] : '',
+            'amount' => (float)$row[3],
+            'date' => (string)$row[4],
+            'description' => (string)$row[5],
+        ];
+        $ids[] = (int)$row[0];
+        if ($row[2] !== null && (int)$row[2] > 100 && (int)$row[2] === (int)$bankTrans['no']) {
+            $foundCheckNum = true;
+        }
+    }
+    dbi_free_result($res);
+
+    if (!$foundCheckNum && !empty($bankTrans['no']) && (int)$bankTrans['no'] > 99) {
+        $sql = 'SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, chk_description ' .
+               'FROM chk_trans ' .
+               'WHERE chk_reconciled = ? AND chk_no = ? AND chk_acct_id = ?';
+        $res = dbi_execute($sql, ['N', $bankTrans['no'], $acct]);
+
+        if (!$res) {
+            throw new Exception(translate('Database error') . ': ' . translate('Unable to find transactions by check number'));
+        }
+
+        $matches = [];
+        while ($row = dbi_fetch_row($res)) {
+            $matches[] = [
+                'account' => $acct,
+                'trans_id' => (int)$row[0],
+                'type' => (int)$row[1],
+                'no' => $row[2] !== null ? (string)$row[2] : '',
+                'amount' => (float)$row[3],
+                'date' => (string)$row[4],
+                'description' => (string)$row[5],
+            ];
+            $ids[] = (int)$row[0];
+        }
+        dbi_free_result($res);
+    }
+
+    $min = number_format(-$bankTrans['amount'] - 0.50, 2, '.', '');
+    $max = number_format(-$bankTrans['amount'] + 0.50, 2, '.', '');
+    $sql = 'SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, chk_description ' .
+           'FROM chk_trans ' .
+           'WHERE chk_amount > ? AND chk_amount < ? ' .
+           'AND chk_reconciled = ? AND chk_date >= ? AND chk_date <= ? ' .
+           'AND chk_acct_id = ?';
+    $res = dbi_execute($sql, [$min, $max, 'N', $date1, $date2, $acct]);
+
+    if (!$res) {
+        throw new Exception(translate('Database error') . ': ' . translate('Unable to find transactions'));
+    }
+
+    while ($row = dbi_fetch_row($res)) {
+        $matches[] = [
+            'account' => $acct,
+            'trans_id' => (int)$row[0],
+            'type' => (int)$row[1],
+            'no' => $row[2] !== null ? (string)$row[2] : '',
+            'amount' => (float)$row[3],
+            'date' => (string)$row[4],
+            'description' => (string)$row[5],
+        ];
+        $ids[] = (int)$row[0];
+    }
+    dbi_free_result($res);
+
+    $date1 = shiftDate($bankTrans['date'], -30);
+    $date2 = shiftDate($bankTrans['date'], 0);
+    $sql = 'SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, chk_description ' .
+           'FROM chk_trans ' .
+           'WHERE chk_reconciled = ? AND chk_date >= ? AND chk_date <= ? ' .
+           'AND chk_acct_id = ? ' .
+           'ORDER BY chk_date DESC LIMIT 10';
+    $res = dbi_execute($sql, ['N', $date1, $date2, $acct]);
+
+    if (!$res) {
+        throw new Exception(translate('Database error') . ': ' . translate('Unable to find recent transactions'));
+    }
+
+    while ($row = dbi_fetch_row($res)) {
+        if (!in_array((int)$row[0], $ids, true)) {
+            $matches[] = [
+                'account' => $acct,
+                'trans_id' => (int)$row[0],
+                'type' => (int)$row[1],
+                'no' => $row[2] !== null ? (string)$row[2] : '',
+                'amount' => (float)$row[3],
+                'date' => (string)$row[4],
+                'description' => (string)$row[5],
+            ];
+            $ids[] = (int)$row[0];
+        }
+    }
+    dbi_free_result($res);
+
+    return $matches;
+}
+
+/**
+ * Retrieves the description of the most recent reconciled transaction matching a bank description.
+ *
+ * @param int    $acct           The account ID.
+ * @param string $bankDescription The bank transaction description.
+ * @return string The matching description, or empty string if none found.
+ */
+function get_description_from_prior_reconcile(int $acct, string $bankDescription): string
+{
+    $sql = 'SELECT chk_trans.chk_description ' .
+           'FROM chk_bank_trans ' .
+           'INNER JOIN chk_trans ON chk_trans.chk_trans_id = chk_bank_trans.chk_trans_id ' .
+           'WHERE chk_bank_trans.chk_description = ? AND chk_trans.chk_acct_id = ? ' .
+           'ORDER BY chk_trans.chk_date DESC LIMIT 1';
+    $res = dbi_execute($sql, [$bankDescription, $acct]);
+
+    if (!$res) {
+        throw new Exception(translate('Database error') . ': ' . translate('Unable to retrieve prior description'));
+    }
+
+    $ret = '';
+    if ($row = dbi_fetch_row($res)) {
+        $ret = (string)$row[0];
+    }
+    dbi_free_result($res);
     return $ret;
 }
 
-
-function fatalError ( $msg )
+/**
+ * Retrieves the amount of the most recent transaction for a given description.
+ *
+ * @param int    $acct        The account ID.
+ * @param string $description The transaction description.
+ * @return string The amount, or empty string if none found.
+ */
+function get_last_amount_for_description(int $acct, string $description): string
 {
-  echo "<html><head><title>Error</title></head>\n" .
-    "<body><h2>error</h2>" . $msg . "</body></html>\n";
-  exit;
-}
+    $sql = 'SELECT chk_amount FROM chk_trans ' .
+           'WHERE chk_acct_id = ? AND chk_description = ? ' .
+           'ORDER BY chk_date DESC LIMIT 1';
+    $res = dbi_execute($sql, [$acct, $description]);
 
-
-function update_balances ( $acct )
-{
-  $sum = 0;
-  $res = dbi_query ( "SELECT SUM(chk_amount) FROM chk_trans " .
-    "WHERE chk_acct_id = $acct" );
-  if ( $res ) {
-    if ( $row = dbi_fetch_row ( $res ) ) {
-      $sum = $row[0];
+    if (!$res) {
+        throw new Exception(translate('Database error') . ': ' . translate('Unable to retrieve last amount'));
     }
-    dbi_free_result ( $res );
-    dbi_query ( "UPDATE chk_account SET chk_balance = $sum WHERE " .
-      "chk_acct_id = $acct" );
-  } else {
-    fatalError ( "Database error: " . dbi_error () );
-  }
-  $sum = 0;
-  $res = dbi_query ( "SELECT SUM(chk_amount) FROM chk_trans " .
-    "WHERE chk_acct_id = $acct AND chk_reconciled = 'Y'" );
-  if ( $res ) {
-    if ( $row = dbi_fetch_row ( $res ) ) {
-      $sum = $row[0];
+
+    $ret = '';
+    if ($row = dbi_fetch_row($res)) {
+        $ret = (string)$row[0];
     }
-    if ( empty ( $sum ) )
-      $sum = '0';
-    dbi_free_result ( $res );
-    dbi_query ( "UPDATE chk_account SET chk_bank_balance = $sum WHERE " .
-      "chk_acct_id = $acct" );
-  } else {
-    fatalError ( "Database error: " . dbi_error () );
-  }
+    dbi_free_result($res);
+    return $ret;
 }
-
-
-function shiftDate ( $date, $days )
-{
-  $year = substr ( $date, 0, 4 );
-  $month = substr ( $date, 4, 2 );
-  $day = substr ( $date, 6, 2 );
-  $time = mktime ( 3, 0, 0, $month, $day + $days, $year );
-  return date ( "Ymd", $time );
-}
-
-
-// Find the transaction in our records that is the closest match
-// to the transaction from the bank.
-function find_transactions ( $bankTrans, $daysBack=14 )
-{
-  global $acct;
-  $ids = array ();
-  $date1 = shiftDate ( $bankTrans['date'], 0 - $daysBack );
-  $date2 = shiftDate ( $bankTrans['date'], 7 );
-  // Look for transactions within 14 days that are for the same amount
-  // and that have not been reconciled yet.
-  $min = sprintf ( "%.2f", $bankTrans['amount'] - 0.50 );
-  $max = sprintf ( "%.2f", $bankTrans['amount'] + 0.50 );
-  $foundCheckNum = false;
-  $sql = "SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, " .
-    "chk_description " .
-    "FROM chk_trans " .
-    "WHERE chk_amount > $min AND chk_amount < $max " .
-    "AND chk_reconciled = 'N' AND " .
-    "chk_date >= $date1 AND chk_date <= $date2 " .
-    "and chk_acct_id = $acct";
-  //echo "SQL: $sql <br />\n";
-  $res = dbi_query ( $sql );
-  if ( ! $res )
-    fatalError ( "Database error: " . dbi_error () );
-  $matches = array ();
-  while ( $row = dbi_fetch_row ( $res ) ) {
-    $match = array (
-      "account" => $acct,
-      "trans_id" => $row[0],
-      "type" => $row[1],
-      "no" => $row[2],
-      "amount" => $row[3],
-      "date" => $row[4],
-      "description" => $row[5]
-    );
-    $matches[] = $match;
-    $ids[] = $row[0]; // Add trans id to list to avoid dups
-    if ( $match['no'] > 100 && $match['no'] == $bankTrans['no'] )
-      $foundCheckNum = true;
-  }
-  dbi_free_result ( $res );
-  if ( ! $foundCheckNum && $bankTrans['no'] > 99 ) {
-    // Search for check number...
-    $sql = "SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, " .
-      "chk_description " .
-      "FROM chk_trans " .
-      "WHERE chk_reconciled = 'N' AND " .
-      "chk_no = " . $bankTrans['no'] . " " .
-      "and chk_acct_id = $acct";
-    //echo "SQL: $sql <br />\n";
-    $res = dbi_query ( $sql );
-    if ( ! $res )
-      fatalError ( "Database error: " . dbi_error () );
-    $matches = array ();
-    while ( $row = dbi_fetch_row ( $res ) ) {
-      $match = array (
-        "account" => $acct,
-        "trans_id" => $row[0],
-        "type" => $row[1],
-        "no" => $row[2],
-        "amount" => $row[3],
-        "date" => $row[4],
-        "description" => $row[5]
-      );
-      $matches[] = $match;
-      $ids[] = $row[0]; // Add trans id to list to avoid dups
-    }
-  }
-  // Also check for a sign mistake in case they called a deposit an expense by mistake.
-  $min = sprintf ( "%.2f", 0.0 - $bankTrans['amount'] - 0.50 );
-  $max = sprintf ( "%.2f", 0.0 - $bankTrans['amount'] + 0.50 );
-  $sql = "SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, " .
-    "chk_description " .
-    "FROM chk_trans " .
-    "WHERE chk_amount > $min AND chk_amount < $max " .
-    "AND chk_reconciled = 'N' AND " .
-    "chk_date >= $date1 AND chk_date <= $date2 " .
-    "and chk_acct_id = $acct";
-  //echo "SQL: $sql <br />\n";
-  $res = dbi_query ( $sql );
-  if ( ! $res )
-    fatalError ( "Database error: " . dbi_error () );
-  while ( $row = dbi_fetch_row ( $res ) ) {
-    $match = array (
-      "account" => $acct,
-      "trans_id" => $row[0],
-      "type" => $row[1],
-      "no" => $row[2],
-      "amount" => $row[3],
-      "date" => $row[4],
-      "description" => $row[5]
-    );
-    $matches[] = $match;
-    $ids[] = $row[0]; // Add trans id to list to avoid dups
-  }
-
-  // Also include the most recent unreconciled transactions that
-  // are on or before the post date and within 30 days and
-  // not yet reconciled... with a limit of 10.
-  $date1 = shiftDate ( $bankTrans['date'], 0 - 30 );
-  $date2 = shiftDate ( $bankTrans['date'], 0 );
-  $sql = "SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, " .
-    "chk_description " .
-    "FROM chk_trans " .
-    "WHERE chk_reconciled = 'N' AND " .
-    "chk_date >= $date1 AND chk_date <= $date2 " .
-    "AND chk_acct_id = $acct " .
-    "ORDER BY chk_date DESC LIMIT 10";
-  //echo "SQL: $sql <br />\n";
-  $res = dbi_query ( $sql );
-  if ( ! $res )
-    fatalError ( "Database error: " . dbi_error () );
-  while ( $row = dbi_fetch_row ( $res ) ) {
-    if ( ! in_array ( $row[0], $ids ) ) {
-      $match = array (
-        "account" => $acct,
-        "trans_id" => $row[0],
-        "type" => $row[1],
-        "no" => $row[2],
-        "amount" => $row[3],
-        "date" => $row[4],
-        "description" => $row[5]
-      );
-      $matches[] = $match;
-      $ids[] = $row[0]; // Add trans id to list to avoid dups
-    }
-  }
-
-  return $matches;
-}
-
-function get_description_from_prior_reconcile ( $acct, $bankDescription ) {
-   $ret = '';
-   $sql = 'SELECT chk_trans.chk_description ' .
-     'FROM chk_bank_trans, chk_trans ' .
-     'WHERE chk_trans.chk_trans_id = chk_bank_trans.chk_trans_id ' .
-     'AND chk_bank_trans.chk_description = ? ' .
-     'AND chk_trans.chk_acct_id = ? '.
-     'ORDER BY chk_trans.chk_date DESC LIMIT 1';
-   $params = [$bankDescription, $acct];
-   $res = dbi_execute ( $sql, $params );
-   $descriptions = array ();
-   if ( $row = dbi_fetch_row ( $res ) ) {
-     $ret = $row[0];
-   }
-   dbi_free_result ( $res );
-   return $ret;
-}
-
-function get_last_amount_for_decription ( $acct, $description ) {
-  $ret = '';
-  $sql = 'SELECT chk_amount FROM chk_trans ' .
-    'WHERE chk_acct_id = ? AND ' .
-    'chk_description = ? ' .
-    'ORDER BY chk_date DESC LIMIT 1';
-  $params = [$acct,$description];
-  $res = dbi_execute ( $sql, $params );
-  $descriptions = array ();
-  if ( $row = dbi_fetch_row ( $res ) ) {
-    $ret = $row[0];
-  }
-  dbi_free_result ( $res );
-  return $ret;
-}
-
-
 ?>

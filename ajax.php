@@ -82,7 +82,7 @@ $function = getValue('function');
 
 if ($function == 'lastAmount') {
   $desc = getValue('desc');
-  $amount = get_last_amount_for_decription($acct, $desc);
+  $amount = get_last_amount_for_description($acct, $desc);
   $data = [
     'amount' => $amount,
     'acct' => $acct,

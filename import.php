@@ -1,73 +1,85 @@
 <?php
+declare(strict_types=1);
+
+/**
+ * Displays a form to import transactions from a CSV file in the checkbook application.
+ *
+ * Allows users to upload a CSV file with transaction data for a specified account.
+ * Updated for PHP 8 best practices by Grok (xAI) in September 2025.
+ *
+ * @package Checkbook
+ */
 
 include_once 'includes/config.php';
 include_once 'includes/php-dbi.php';
 include_once 'includes/functions.php';
 include_once 'includes/connect.php';
 include_once 'includes/ui.php';
-
 include_once 'includes/translate.php';
 
-$acct = getIntValue ( "acct" );
+$acct = getIntValue('acct', true);
+if (empty($acct)) {
+    fatalError(translate('No account specified'));
+}
 
-// Get account info
-$sql = "SELECT chk_bank, chk_name, chk_account_no, " .
-  "chk_balance, chk_bank_balance " .
-  "FROM chk_account WHERE chk_acct_id = $acct";
-$res = dbi_query ( $sql );
-$Account = array ();
-if ( $res ) {
-  $row = dbi_fetch_row ( $res );
-  if ( $row ) {
-    $Account['acct_id'] = $acct;
-    $Account['bank'] = $row[0];
-    $Account['name'] = $row[1];
-    $Account['account_no'] = $row[2];
-    $Account['balance'] = $row[3];
-    $Account['bank_balance'] = $row[4];
-    dbi_free_result ( $res );
-  } else {
-    fatalError ( "No such acct: $acct" );
-  }
+// Get account info using prepared statement
+$sql = 'SELECT chk_bank, chk_name, chk_account_no, chk_balance, chk_bank_balance ' .
+       'FROM chk_account WHERE chk_acct_id = ?';
+$res = dbi_execute($sql, [$acct]);
+$account = [];
+if ($res) {
+    if ($row = dbi_fetch_row($res)) {
+        $account = [
+            'acct_id' => $acct,
+            'bank' => (string)$row[0],
+            'name' => (string)$row[1],
+            'account_no' => (string)$row[2],
+            'balance' => (float)$row[3],
+            'bank_balance' => (float)$row[4],
+        ];
+        dbi_free_result($res);
+    } else {
+        fatalError(translate('No such account: ') . $acct);
+    }
 } else {
-  fatalError ( "Error in query:<br />$sql<br />" . dbi_error () );
-}
-// Get first and last transaction date.
-$sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans ' .
-  'WHERE chk_acct_id = ?';
-$res = dbi_execute ( $sql, [ $acct ] );
-if ( $res ) {
-  if ( $row = dbi_fetch_row ( $res ) ) {
-    $Account['start_date'] = $row[0];
-    $Account['end_date'] = $row[1];
-  }
+    fatalError(translate('Database error') . ': Unable to retrieve account information.');
 }
 
-print_header ( translate("Import") );
+// Get first and last transaction date
+$sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans WHERE chk_acct_id = ?';
+$res = dbi_execute($sql, [$acct]);
+if ($res) {
+    if ($row = dbi_fetch_row($res)) {
+        $account['start_date'] = (string)($row[0] ?? '');
+        $account['end_date'] = (string)($row[1] ?? '');
+    }
+    dbi_free_result($res);
+}
 
-print_heading ( translate("Import") );
-
-print_account_info ( $Account );
+$title = translate('Import');
+print_header($title);
+print_heading($title);
+print_account_info($account);
 
 ?>
 
-<form action="import_handler.php" method="post" name="importform" enctype="multipart/form-data">
-<input type="hidden" name="acct" value="<?php echo $acct; ?>" />
-
-<table style="border-width:0px;">
-
-<tr><td style="font-weight:bold;"><?php etranslate("Description")?>:</td>
-<td><input type="text" size="30" name="description" /></td></tr>
-
-<tr><td style="font-weight:bold;"><?php etranslate("CSV File")?>:</td>
-  <td><input type="file" name="FileName" size="45" maxlength="50" /></td></tr>
-<tr><td colspan="2"><input type="submit" value="<?php etranslate("Import")?>" />
-</td></tr>
-
-</table>
-
+<form action="import_handler.php" method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="acct" value="<?php echo htmlspecialchars((string)$account['acct_id']); ?>" />
+    <table style="border: 0;">
+        <tr>
+            <td style="font-weight: bold;"><?php echo translate('Description'); ?>:</td>
+            <td><input type="text" size="30" name="description" /></td>
+        </tr>
+        <tr>
+            <td style="font-weight: bold;"><?php echo translate('CSV File'); ?>:</td>
+            <td><input type="file" name="FileName" size="45" maxlength="50" accept=".csv" /></td>
+        </tr>
+        <tr>
+            <td colspan="2"><input type="submit" value="<?php echo translate('Import'); ?>" /></td>
+        </tr>
+    </table>
 </form>
 
 <?php
-print_trailer ();
+print_trailer();
 ?>

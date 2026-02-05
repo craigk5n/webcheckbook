@@ -1,138 +1,137 @@
 <?php
+declare(strict_types=1);
+
+/**
+ * Displays a paginated list of transactions for a specific account.
+ *
+ * Retrieves account information and transactions for the specified account ID,
+ * displaying them in a table with pagination controls. Updated for PHP 8 best practices
+ * by Grok (xAI) in September 2025. Changes include strict typing, prepared statements
+ * to prevent SQL injection, consistent HTML escaping, improved error handling,
+ * and removal of unused $doUpdate variable.
+ *
+ * @package Checkbook
+ */
 
 include_once 'includes/config.php';
 include_once 'includes/php-dbi.php';
 include_once 'includes/functions.php';
 include_once 'includes/connect.php';
 include_once 'includes/ui.php';
-
 include_once 'includes/translate.php';
 
-$NUM_DISPLAY = 50;
+const NUM_DISPLAY = 50;
 
-$first = getIntValue ( "first" );
-$acct = getIntValue ( "acct" );
-if ( empty ( $acct ) ) {
-  fatalError ( "No account specified" );
+$first = getIntValue('first');
+$acct = getIntValue('acct', true);
+if (empty($acct)) {
+    fatalError(translate('No account specified'));
 }
 
-$doUpdate = getIntValue ( 'update' );
-
-// Get account info
-$sql = "SELECT chk_bank, chk_name, chk_account_no, " .
-  "chk_balance, chk_bank_balance " .
-  "FROM chk_account WHERE chk_acct_id = $acct";
-$res = dbi_query ( $sql );
-$Account = array ();
-if ( $res ) {
-  $row = dbi_fetch_row ( $res );
-  if ( $row ) {
-    $Account['acct_id'] = $acct;
-    $Account['bank'] = $row[0];
-    $Account['name'] = $row[1];
-    $Account['account_no'] = $row[2];
-    $Account['balance'] = $row[3];
-    $Account['bank_balance'] = $row[4];
-    dbi_free_result ( $res );
-  } else {
-    fatalError ( "No such acct: $acct" );
-  }
-} else {
-  fatalError ( "Error in query:<br />$sql<br />" . dbi_error () );
-}
-// Get first and last transaction date.
-$sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans ' .
-  'WHERE chk_acct_id = ?';
-$res = dbi_execute ( $sql, [ $acct ] );
-if ( $res ) {
-  if ( $row = dbi_fetch_row ( $res ) ) {
-    $Account['start_date'] = $row[0];
-    $Account['end_date'] = $row[1];
-  }
-}
-
-update_balances ( $acct );
-
-print_header ( translate("Account") . ": " . $Account['name'] );
-
-print_heading ( translate("Account") . ": " . $Account['name'] );
-
-print_account_info ( $Account );
-
-echo '<p><a href="edit_account.php?acct=' .
-  $acct . '">Edit Account</a></p>';
-
-$sql = "SELECT chk_trans_id, chk_type, chk_no, chk_amount, " .
-  "chk_date, chk_description, chk_reconciled " .
-  "FROM chk_trans " .
-  "WHERE chk_acct_id = $acct " .
-  "ORDER BY chk_date ASC";
-
-$res = dbi_query ( $sql );
-open_table ( array ( "Date", "Chk#", "Comment", "Amount", "Balance", " ", "Bank Bal" ) );
-$bal = 0.0;
-$bankBal = 0.0;
-if ( $res ) {
-  $out = array ();
-  $cnt = 0;
-  $lastDate = '';
-  while ( $row = dbi_fetch_row ( $res ) ) {
-    $cnt++;
-    if ( $cnt == 0 || $row[4] != $lastDate ) {
-      $out[] = "<tr><td colspan=\"7\" style=\"height: 1px; background-color: #000;\"></td></tr>\n";
-    }
-    if ( $row[3] > 0 ) {
-      $class = "deposit";
+// Get account info using prepared statement
+$sql = 'SELECT chk_bank, chk_name, chk_account_no, chk_balance, chk_bank_balance ' .
+       'FROM chk_account WHERE chk_acct_id = ?';
+$res = dbi_execute($sql, [$acct]);
+$account = [];
+if ($res) {
+    if ($row = dbi_fetch_row($res)) {
+        $account = [
+            'acct_id' => $acct,
+            'bank' => (string)$row[0],
+            'name' => (string)$row[1],
+            'account_no' => (string)$row[2],
+            'balance' => (float)$row[3],
+            'bank_balance' => (float)$row[4],
+        ];
+        dbi_free_result($res);
     } else {
-      $class = ( $cnt % 2 == 0 ) ? "withdrawal-even" : "withdrawal-odd";
+        fatalError(translate('No such account: ') . $acct);
     }
-    $line = "<tr><td class=\"$class\">" .
-      "<a href=\"edit_trans.php?acct=$acct&trans=$row[0]\">" .
-      date_to_str ( $row[4], "__mm__/__dd__/__yyyy__", false ) .
-      "</a></td>";
-    $line .= "<td class=\"$class\">" . ( empty ( $row[2] ) ? "-" : $row[2] ) . "</td>";
-    $line .= "<td class=\"$class\">" . htmlentities ( $row[5] ) . "</td>";
-    $line .= "<td class=\"$class\" align=\"right\">" . ( sprintf ( "%.02f", $row[3] ) ) . "</td>";
-    $bal += $row[3];
-    $line .= "<td class=\"$class\" align=\"right\">" . ( sprintf ( "%.02f", $bal ) ) . "</td>";
-    if ( $row[6] == 'Y' ) {
-      $bankBal += $row[3];
-    }
-    $line .= "<td class=\"$class\" align=\"right\"><img src=\"" .
-      ( $row[6] == 'Y' ? 'images/reconciled.png' : 'images/not_reconciled.png' ) .
-      "\" alt=\"rec\" /></td>";
-    $line .= "<td class=\"$class\" align=\"right\">" .
-      ( sprintf ( "%.02f", $bankBal ) ) . "</td>";
-    $out[] = $line;
-    $lastDate = $row[4];
-  }
-  dbi_free_result ( $res );
 } else {
-  fatalError ( translate("Database error") . ": " . dbi_error () );
+    fatalError(translate('Database error') . ': Unable to retrieve account information.');
 }
 
-$out[] = "<tr><td colspan=\"7\" style=\"height: 1px; background-color: #000;\"></td></tr>\n";
-
-if ( empty ( $first ) ) {
-  $first = count ( $out ) - $NUM_DISPLAY;
+// Get first and last transaction date
+$sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans WHERE chk_acct_id = ?';
+$res = dbi_execute($sql, [$acct]);
+if ($res) {
+    if ($row = dbi_fetch_row($res)) {
+        $account['start_date'] = (string)($row[0] ?? '');
+        $account['end_date'] = (string)($row[1] ?? '');
+    }
+    dbi_free_result($res);
 }
-if ( $first < 0 )
-  $first = 0;
-for ( $i = $first, $j = 0; $i < count ( $out ) && $j < $NUM_DISPLAY; $i++, $j++ ) {
-  print $out[$i];
+
+update_balances($acct);
+
+$title = translate('Account') . ': ' . htmlentities($account['name']);
+print_header($title);
+print_heading($title);
+
+print_account_info($account);
+
+echo '<p><a href="edit_account.php?acct=' . $acct . '">' . translate('Edit Account') . '</a></p>';
+
+$sql = 'SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, chk_description, chk_reconciled ' .
+       'FROM chk_trans WHERE chk_acct_id = ? ORDER BY chk_date ASC';
+$res = dbi_execute($sql, [$acct]);
+$rows = [];
+$bal = 0.0;
+$bank_bal = 0.0;
+$last_date = '';
+if ($res) {
+    while ($row = dbi_fetch_row($res)) {
+        $class = $row[3] > 0 ? 'deposit' : (count($rows) % 2 === 0 ? 'withdrawal-even' : 'withdrawal-odd');
+        if (empty($rows) || $row[4] !== $last_date) {
+            $rows[] = '<tr><td colspan="7" style="height: 1px; background-color: #000;"></td></tr>';
+        }
+        $bal += (float)$row[3];
+        $bank_bal += $row[6] === 'Y' ? (float)$row[3] : 0.0;
+        $rows[] = sprintf(
+            '<tr>' .
+            '<td class="%s"><a href="edit_trans.php?acct=%d&trans=%d">%s</a></td>' .
+            '<td class="%s">%s</td>' .
+            '<td class="%s">%s</td>' .
+            '<td class="%s" align="right">%.2f</td>' .
+            '<td class="%s" align="right">%.2f</td>' .
+            '<td class="%s" align="right"><img src="%s" alt="rec" /></td>' .
+            '<td class="%s" align="right">%.2f</td>' .
+            '</tr>',
+            $class, $acct, (int)$row[0], date_to_str((string)$row[4], '__mm__/__dd__/__yyyy__', false),
+            $class, empty($row[2]) ? '-' : htmlentities((string)$row[2]),
+            $class, htmlentities((string)$row[5]),
+            $class, (float)$row[3],
+            $class, $bal,
+            $class, $row[6] === 'Y' ? 'images/reconciled.png' : 'images/not_reconciled.png',
+            $class, $bank_bal
+        );
+        $last_date = (string)$row[4];
+    }
+    dbi_free_result($res);
+} else {
+    fatalError(translate('Database error') . ': Unable to retrieve transactions.');
 }
 
+$rows[] = '<tr><td colspan="7" style="height: 1px; background-color: #000;"></td></tr>';
 
-close_table ();
+$first = max((int)$first, 0);
+$first = empty($first) ? max(count($rows) - NUM_DISPLAY, 0) : $first;
+$display_rows = array_slice($rows, $first, NUM_DISPLAY);
+
+open_table(['Date', 'Chk#', 'Comment', 'Amount', 'Balance', ' ', 'Bank Bal']);
+foreach ($display_rows as $row) {
+    echo $row . "\n";
+}
+close_table();
 
 ?>
 
 <form action="list.php" method="GET">
-<input type="hidden" name="acct" value="<?php echo $acct;?>" />
-<input type="hidden" name="first" value="<?php echo ( $first - $NUM_DISPLAY ); ?>" />
-<input type="submit" value="Previous 100" />
+    <input type="hidden" name="acct" value="<?php echo htmlspecialchars((string)$acct); ?>" />
+    <input type="hidden" name="first" value="<?php echo htmlspecialchars((string)max($first - NUM_DISPLAY, 0)); ?>" />
+    <input type="submit" value="<?php echo translate('Previous 100'); ?>" />
 </form>
 
 <?php
-print_trailer ();
+print_trailer();
 ?>
