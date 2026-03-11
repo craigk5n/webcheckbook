@@ -1,0 +1,8 @@
+{
+    "name": "craigk5n/checkbook",
+    "description": "WebCheckbook",
+    "type": "project",
+    "require-dev": {
+        "phpunit/phpunit": "^11.5"
+    }
+}

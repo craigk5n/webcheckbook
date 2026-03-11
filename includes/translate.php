@@ -107,8 +107,8 @@ function etranslate ( $str ) {
 // which will barf on HTML.
 function tooltip ( $str ) {
   $ret = translate ( $str );
-  $ret = eregi_replace ( "<[^>]+>", "", $ret );
-  $ret = eregi_replace ( "\"", "'", $ret );
+  $ret = preg_replace ( '/<[^>]+>/', '', $ret );
+  $ret = str_replace ( '"', "'", $ret );
   return $ret;
 }
 

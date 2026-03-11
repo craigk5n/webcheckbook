@@ -1,16 +1,6 @@
 <?php
 declare(strict_types=1);
 
-/**
- * Handles the import of transactions from a CSV file in the checkbook application.
- *
- * Processes an uploaded CSV file, validates its structure, and inserts transactions
- * into the database. Displays import results or errors. Updated for PHP 8 best
- * practices by Grok (xAI) in September 2025.
- *
- * @package Checkbook
- */
-
 include_once 'includes/config.php';
 include_once 'includes/php-dbi.php';
 include_once 'includes/functions.php';
@@ -23,39 +13,7 @@ if (empty($acct)) {
     fatalError(translate('No account specified'));
 }
 
-// Get account info using prepared statement
-$sql = 'SELECT chk_bank, chk_name, chk_account_no, chk_balance, chk_bank_balance ' .
-       'FROM chk_account WHERE chk_acct_id = ?';
-$res = dbi_execute($sql, [$acct]);
-$account = [];
-if ($res) {
-    if ($row = dbi_fetch_row($res)) {
-        $account = [
-            'acct_id' => $acct,
-            'bank' => (string)$row[0],
-            'name' => (string)$row[1],
-            'account_no' => (string)$row[2],
-            'balance' => (float)$row[3],
-            'bank_balance' => (float)$row[4],
-        ];
-        dbi_free_result($res);
-    } else {
-        fatalError(translate('No such account: ') . $acct);
-    }
-} else {
-    fatalError(translate('Database error') . ': Unable to retrieve account information.');
-}
-
-// Get first and last transaction date
-$sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans WHERE chk_acct_id = ?';
-$res = dbi_execute($sql, [$acct]);
-if ($res) {
-    if ($row = dbi_fetch_row($res)) {
-        $account['start_date'] = (string)($row[0] ?? '');
-        $account['end_date'] = (string)($row[1] ?? '');
-    }
-    dbi_free_result($res);
-}
+$account = get_account_info($acct);
 
 $description = getValue('description');
 if (strlen($description) > 100) {
@@ -77,7 +35,6 @@ $errors = [];
 $start_date = '';
 $end_date = '';
 $transactions = [];
-$sequence = 0;
 
 // Get next statement ID
 $statement_id = 1;
@@ -96,112 +53,43 @@ if ($fd === false) {
     fatalError(translate('Error opening uploaded file'));
 }
 
-$data = fgetcsv($fd, 1000, ',');
-if ($data === false) {
+$headerRow = fgetcsv($fd, 1000, ',');
+if ($headerRow === false) {
     fclose($fd);
     fatalError(translate('Error reading CSV file'));
 }
 
-$num_header = count($data);
-$date_ind = $chk_ind = $desc_ind = $debit_ind = $credit_ind = $status_ind = $balance_ind = -1;
-foreach ($data as $i => $header) {
-    $h = strtolower((string)$header);
-    if (preg_match('/date/', $h)) {
-        $date_ind = $i;
-    } elseif (preg_match('/check/', $h)) {
-        $chk_ind = $i;
-    } elseif (preg_match('/descr/', $h)) {
-        $desc_ind = $i;
-    } elseif (preg_match('/debit/', $h)) {
-        $debit_ind = $i;
-    } elseif (preg_match('/credit/', $h)) {
-        $credit_ind = $i;
-    } elseif (preg_match('/status/', $h)) {
-        $status_ind = $i;
-    } elseif (preg_match('/balance/', $h)) {
-        $balance_ind = $i;
-    }
-}
-
-// Validate required headers
-if ($date_ind < 0) {
-    $errors[] = translate('Did not find "date" in header');
-}
-if ($chk_ind < 0) {
-    $errors[] = translate('Did not find "check" in header');
-}
-if ($desc_ind < 0) {
-    $errors[] = translate('Did not find "description" in header');
-}
-if ($credit_ind < 0) {
-    $errors[] = translate('Did not find "credit" in header');
-}
-if ($debit_ind < 0) {
-    $errors[] = translate('Did not find "debit" in header');
-}
-if ($balance_ind < 0) {
-    $errors[] = translate('Did not find "balance" in header');
-}
+$num_header = count($headerRow);
+$indices = parse_csv_headers($headerRow);
+$errors = validate_csv_headers($indices);
 
 if (empty($errors)) {
     $line = 1;
     while (($data = fgetcsv($fd, 1000, ',')) !== false) {
         $line++;
-        if (count($data) !== $num_header) {
-            $errors[] = sprintf(translate('Line %d has %d columns instead of %d'), $line, count($data), $num_header);
+        $result = parse_csv_row($data, $indices, $num_header, $line);
+
+        if ($result['error'] !== null) {
+            $errors[] = $result['error'];
             continue;
         }
 
-        $date = $data[$date_ind] ?? '';
-        if (!preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/', $date, $args)) {
-            $errors[] = sprintf(translate('Invalid date format at line %d'), $line);
-            continue;
-        }
-        $month = (int)$args[1];
-        $day = (int)$args[2];
-        $year = (int)$args[3];
-        if ($year < 100) {
-            $year += 2000;
-        }
-        if (!checkdate($month, $day, $year)) {
-            $errors[] = sprintf(translate('Invalid date at line %d'), $line);
-            continue;
-        }
-        $date_str = sprintf('%04d%02d%02d', $year, $month, $day);
-
-        $credit = (float)($data[$credit_ind] ?? 0.0);
-        $debit = (float)($data[$debit_ind] ?? 0.0);
-        $amount = $credit > 0.0 ? $credit : -$debit;
-        if ($amount == 0.0) {
-            continue; // Skip empty transactions
+        if ($result['transaction'] === null) {
+            continue; // Skipped (e.g. zero amount)
         }
 
-        $check_no = !empty($data[$chk_ind]) ? (string)$data[$chk_ind] : null;
-        $desc = strtoupper((string)($data[$desc_ind] ?? ''));
-        if (strlen($desc) > 100) {
-            $errors[] = sprintf(translate('Description too long at line %d'), $line);
-            continue;
-        }
+        $trans = $result['transaction'];
+        $transactions[] = $trans;
 
-        $transactions[] = [
-            'date' => $date_str,
-            'amount' => $amount,
-            'no' => $check_no,
-            'desc' => $desc,
-            'memo' => '',
-        ];
-
-        if (empty($start_date) || $date_str < $start_date) {
-            $start_date = $date_str;
+        if (empty($start_date) || $trans['date'] < $start_date) {
+            $start_date = $trans['date'];
         }
-        if (empty($end_date) || $date_str > $end_date) {
-            $end_date = $date_str;
+        if (empty($end_date) || $trans['date'] > $end_date) {
+            $end_date = $trans['date'];
         }
     }
-    fclose($fd);
-} else {
-    fclose($fd);
 }
+fclose($fd);
 
 if (empty($errors)) {
     // Insert statement
@@ -213,7 +101,18 @@ if (empty($errors)) {
 
     // Insert transactions
     foreach ($transactions as $index => $trans) {
-        add_transaction($trans['date'], $trans['amount'], $trans['no'], $trans['desc'], $trans['memo'], $index + 1);
+        $sequence = $index + 1;
+        echo '<br><br><b>' . translate('Date') . ':</b> ' . htmlspecialchars($trans['date']) . '<br>';
+        echo '<b>' . translate('Amount') . ':</b> ' . htmlspecialchars(sprintf('%.2f', $trans['amount'])) . '<br>';
+        echo '<b>' . translate('No') . ':</b> ' . htmlspecialchars($trans['no'] ?? '-') . '<br>';
+        echo '<b>' . translate('Desc') . ':</b> ' . htmlspecialchars($trans['desc']) . '<br>';
+        echo '<b>' . translate('Memo') . ':</b> ' . htmlspecialchars($trans['memo']) . '<br>';
+
+        $sql = 'INSERT INTO chk_bank_trans (chk_acct_id, chk_statement_id, chk_sequence, chk_no, chk_amount, chk_date, chk_description, chk_memo) ' .
+               'VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+        if (!dbi_execute($sql, [$acct, $statement_id, $sequence, $trans['no'], $trans['amount'], $trans['date'], $trans['desc'], $trans['memo']])) {
+            $errors[] = translate('Database error') . ': Unable to insert transaction (' . htmlspecialchars($trans['date']) . ')';
+        }
     }
 }
 
@@ -227,30 +126,3 @@ if (empty($errors)) {
 }
 
 print_trailer();
-
-/**
- * Inserts a single transaction into chk_bank_trans.
- *
- * @param string $date   Transaction date (YYYYMMDD)
- * @param float  $amount Transaction amount
- * @param ?string $no    Check number or null
- * @param string $desc   Transaction description
- * @param string $memo   Transaction memo
- * @param int    $sequence Transaction sequence number
- */
-function add_transaction(string $date, float $amount, ?string $no, string $desc, string $memo, int $sequence): void {
-    global $acct, $statement_id, $errors;
-
-    echo '<br><br><b>' . translate('Date') . ':</b> ' . htmlspecialchars($date) . '<br>';
-    echo '<b>' . translate('Amount') . ':</b> ' . htmlspecialchars(sprintf('%.2f', $amount)) . '<br>';
-    echo '<b>' . translate('No') . ':</b> ' . htmlspecialchars($no ?? '-') . '<br>';
-    echo '<b>' . translate('Desc') . ':</b> ' . htmlspecialchars($desc) . '<br>';
-    echo '<b>' . translate('Memo') . ':</b> ' . htmlspecialchars($memo) . '<br>';
-
-    $sql = 'INSERT INTO chk_bank_trans (chk_acct_id, chk_statement_id, chk_sequence, chk_no, chk_amount, chk_date, chk_description, chk_memo) ' .
-           'VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-    if (!dbi_execute($sql, [$acct, $statement_id, $sequence, $no, $amount, $date, $desc, $memo])) {
-        $errors[] = translate('Database error') . ': ' . translate('Unable to insert transaction') . ' (' . htmlspecialchars($date) . ')';
-    }
-}
-?>

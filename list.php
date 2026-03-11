@@ -28,39 +28,7 @@ if (empty($acct)) {
     fatalError(translate('No account specified'));
 }
 
-// Get account info using prepared statement
-$sql = 'SELECT chk_bank, chk_name, chk_account_no, chk_balance, chk_bank_balance ' .
-       'FROM chk_account WHERE chk_acct_id = ?';
-$res = dbi_execute($sql, [$acct]);
-$account = [];
-if ($res) {
-    if ($row = dbi_fetch_row($res)) {
-        $account = [
-            'acct_id' => $acct,
-            'bank' => (string)$row[0],
-            'name' => (string)$row[1],
-            'account_no' => (string)$row[2],
-            'balance' => (float)$row[3],
-            'bank_balance' => (float)$row[4],
-        ];
-        dbi_free_result($res);
-    } else {
-        fatalError(translate('No such account: ') . $acct);
-    }
-} else {
-    fatalError(translate('Database error') . ': Unable to retrieve account information.');
-}
-
-// Get first and last transaction date
-$sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans WHERE chk_acct_id = ?';
-$res = dbi_execute($sql, [$acct]);
-if ($res) {
-    if ($row = dbi_fetch_row($res)) {
-        $account['start_date'] = (string)($row[0] ?? '');
-        $account['end_date'] = (string)($row[1] ?? '');
-    }
-    dbi_free_result($res);
-}
+$account = get_account_info($acct);
 
 update_balances($acct);
 

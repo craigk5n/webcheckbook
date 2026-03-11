@@ -247,11 +247,11 @@ function weekday_short_name(int $weekday): string
  * @param string $server_time   Optional server time for timezone adjustments.
  * @return string The formatted date string.
  */
-function date_to_str(string $indate, string $format = '', bool $show_weekday = true, bool $short_months = false, string $server_time = ''): string
+function date_to_str(string|int $indate, string $format = '', bool $show_weekday = true, bool $short_months = false, string $server_time = ''): string
 {
     global $DATE_FORMAT, $TZ_OFFSET;
 
-    $indate = empty($indate) ? date('Ymd') : $indate;
+    $indate = empty($indate) ? date('Ymd') : (string)$indate;
     $format = empty($format) ? ($DATE_FORMAT ?: '__month__ __dd__, __yyyy__') : $format;
 
     $year = (int)substr($indate, 0, 4);
@@ -288,20 +288,22 @@ function date_to_str(string $indate, string $format = '', bool $show_weekday = t
  *
  * @param string $msg The error message to display.
  */
-function fatalError(string $msg): void
-{
-    echo <<<HTML
-<html>
-<head>
-    <title>Error</title>
-</head>
-<body>
-    <h2>Error</h2>
-    $msg
-</body>
-</html>
-HTML;
-    exit;
+if (!function_exists('fatalError')) {
+    function fatalError(string $msg): void
+    {
+        echo <<<HTML
+    <html>
+    <head>
+        <title>Error</title>
+    </head>
+    <body>
+        <h2>Error</h2>
+        $msg
+    </body>
+    </html>
+    HTML;
+        exit;
+    }
 }
 
 /**
@@ -314,7 +316,8 @@ function update_balances(int $acct): void
 {
     $res = dbi_execute('SELECT SUM(chk_amount) FROM chk_trans WHERE chk_acct_id = ?', [$acct]);
     if ($res) {
-        $sum = (float)($res->fetch_row()[0] ?? 0);
+        $row = dbi_fetch_row($res);
+        $sum = (float)($row[0] ?? 0);
         dbi_execute('UPDATE chk_account SET chk_balance = ? WHERE chk_acct_id = ?', [$sum, $acct]);
         dbi_free_result($res);
     } else {
@@ -323,7 +326,8 @@ function update_balances(int $acct): void
 
     $res = dbi_execute('SELECT SUM(chk_amount) FROM chk_trans WHERE chk_acct_id = ? AND chk_reconciled = ?', [$acct, 'Y']);
     if ($res) {
-        $sum = (float)($res->fetch_row()[0] ?? 0);
+        $row = dbi_fetch_row($res);
+        $sum = (float)($row[0] ?? 0);
         dbi_execute('UPDATE chk_account SET chk_bank_balance = ? WHERE chk_acct_id = ?', [$sum, $acct]);
         dbi_free_result($res);
     } else {
@@ -338,8 +342,9 @@ function update_balances(int $acct): void
  * @param int    $days Number of days to shift (positive or negative).
  * @return string The shifted date in YYYYMMDD format.
  */
-function shiftDate(string $date, int $days): string
+function shiftDate(string|int $date, int $days): string
 {
+    $date = (string)$date;
     $year = (int)substr($date, 0, 4);
     $month = (int)substr($date, 4, 2);
     $day = (int)substr($date, 6, 2);
@@ -531,4 +536,275 @@ function get_last_amount_for_description(int $acct, string $description): string
     dbi_free_result($res);
     return $ret;
 }
-?>
+
+/**
+ * Loads account info from the database.
+ *
+ * @param int $acctId The account ID.
+ * @return array Account data with keys: acct_id, bank, name, account_no, balance, bank_balance, start_date, end_date
+ */
+function get_account_info(int $acctId): array
+{
+    $sql = 'SELECT chk_bank, chk_name, chk_account_no, chk_balance, chk_bank_balance ' .
+           'FROM chk_account WHERE chk_acct_id = ?';
+    $res = dbi_execute($sql, [$acctId]);
+    if (!$res) {
+        fatalError('Database error: ' . dbi_error());
+    }
+    $row = dbi_fetch_row($res);
+    if (!$row) {
+        fatalError('No such account: ' . $acctId);
+    }
+    $account = [
+        'acct_id' => $acctId,
+        'bank' => (string)$row[0],
+        'name' => (string)$row[1],
+        'account_no' => (string)$row[2],
+        'balance' => (float)$row[3],
+        'bank_balance' => (float)$row[4],
+    ];
+    dbi_free_result($res);
+
+    $sql = 'SELECT MIN(chk_date), MAX(chk_date) FROM chk_trans WHERE chk_acct_id = ?';
+    $res = dbi_execute($sql, [$acctId]);
+    if ($res) {
+        if ($row = dbi_fetch_row($res)) {
+            $account['start_date'] = (string)($row[0] ?? '');
+            $account['end_date'] = (string)($row[1] ?? '');
+        }
+        dbi_free_result($res);
+    }
+
+    return $account;
+}
+
+/**
+ * Gets the next available transaction ID for an account.
+ *
+ * @param int $acctId The account ID.
+ * @return int The next transaction ID.
+ */
+function get_next_trans_id(int $acctId): int
+{
+    $sql = 'SELECT MAX(chk_trans_id) FROM chk_trans WHERE chk_acct_id = ?';
+    $res = dbi_execute($sql, [$acctId]);
+    $nextId = 1;
+    if ($res) {
+        if ($row = dbi_fetch_row($res)) {
+            $nextId = (int)$row[0] + 1;
+        }
+        dbi_free_result($res);
+    }
+    return $nextId;
+}
+
+/**
+ * Parses a user-entered date string (MM/DD/YYYY, MM/DD/YY, MM/DD, or D) into YYYYMMDD format.
+ *
+ * @param string $date The date string to parse.
+ * @return string Date in YYYYMMDD format, or empty string if parsing fails.
+ */
+function parse_date_input(string $date): string
+{
+    $date = trim($date);
+    if ($date === '') {
+        return '';
+    }
+
+    $parts = preg_split('/[\/\-]/', $date);
+    if ($parts === false) {
+        return '';
+    }
+
+    $currentYear = (int)date('Y');
+    $currentMonth = (int)date('m');
+
+    if (count($parts) === 1) {
+        // Just a day number
+        $month = $currentMonth;
+        $day = (int)$parts[0];
+        $year = $currentYear;
+    } elseif (count($parts) === 2) {
+        // MM/DD
+        $month = (int)$parts[0];
+        $day = (int)$parts[1];
+        $year = $currentYear;
+        // If the month is in the future, assume last year
+        if ($month > $currentMonth) {
+            $year--;
+        }
+    } elseif (count($parts) >= 3) {
+        $month = (int)$parts[0];
+        $day = (int)$parts[1];
+        $year = (int)$parts[2];
+        if ($year < 100) {
+            $year += 2000;
+        }
+        if ($year > 2050) {
+            $year -= 100; // 1990s
+        }
+    } else {
+        return '';
+    }
+
+    if ($month < 1 || $month > 12 || $day < 1 || $day > 31) {
+        return '';
+    }
+
+    return sprintf('%04d%02d%02d', $year, $month, $day);
+}
+
+/**
+ * Parses CSV header row and returns column indices.
+ *
+ * @param array $headers Array of header strings from the CSV first row.
+ * @return array Associative array with keys: date, check, description, debit, credit, status, balance.
+ *               Values are column indices (0-based) or -1 if not found.
+ */
+function parse_csv_headers(array $headers): array
+{
+    $indices = [
+        'date' => -1,
+        'check' => -1,
+        'description' => -1,
+        'debit' => -1,
+        'credit' => -1,
+        'status' => -1,
+        'balance' => -1,
+    ];
+
+    foreach ($headers as $i => $header) {
+        $h = strtolower(trim((string)$header));
+        if (preg_match('/date/', $h) && $indices['date'] === -1) {
+            $indices['date'] = $i;
+        } elseif (preg_match('/check/', $h) && $indices['check'] === -1) {
+            $indices['check'] = $i;
+        } elseif (preg_match('/descr/', $h) && $indices['description'] === -1) {
+            $indices['description'] = $i;
+        } elseif (preg_match('/debit/', $h) && $indices['debit'] === -1) {
+            $indices['debit'] = $i;
+        } elseif (preg_match('/credit/', $h) && $indices['credit'] === -1) {
+            $indices['credit'] = $i;
+        } elseif (preg_match('/status/', $h) && $indices['status'] === -1) {
+            $indices['status'] = $i;
+        } elseif (preg_match('/balance/', $h) && $indices['balance'] === -1) {
+            $indices['balance'] = $i;
+        }
+    }
+
+    return $indices;
+}
+
+/**
+ * Validates CSV headers and returns an array of error messages.
+ *
+ * @param array $indices Result from parse_csv_headers().
+ * @return array Array of error strings (empty if all required headers found).
+ */
+function validate_csv_headers(array $indices): array
+{
+    $errors = [];
+    $required = ['date', 'check', 'description', 'debit', 'credit', 'balance'];
+    foreach ($required as $field) {
+        if ($indices[$field] < 0) {
+            $errors[] = 'Did not find "' . $field . '" in header';
+        }
+    }
+    return $errors;
+}
+
+/**
+ * Parses a single CSV data row into a transaction array.
+ *
+ * @param array $data       The CSV row data.
+ * @param array $indices    Column indices from parse_csv_headers().
+ * @param int   $numHeaders Expected number of columns.
+ * @param int   $lineNum    Line number in the CSV file (for error messages).
+ * @return array ['transaction' => array|null, 'error' => string|null]
+ */
+function parse_csv_row(array $data, array $indices, int $numHeaders, int $lineNum): array
+{
+    if (count($data) !== $numHeaders) {
+        return [
+            'transaction' => null,
+            'error' => sprintf('Line %d has %d columns instead of %d', $lineNum, count($data), $numHeaders),
+        ];
+    }
+
+    $date = $data[$indices['date']] ?? '';
+    if (!preg_match('/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/', $date, $args)) {
+        return [
+            'transaction' => null,
+            'error' => sprintf('Invalid date format at line %d: %s', $lineNum, $date),
+        ];
+    }
+    $month = (int)$args[1];
+    $day = (int)$args[2];
+    $year = (int)$args[3];
+    if ($year < 100) {
+        $year += 2000;
+    }
+    if (!checkdate($month, $day, $year)) {
+        return [
+            'transaction' => null,
+            'error' => sprintf('Invalid date at line %d', $lineNum),
+        ];
+    }
+    $dateStr = sprintf('%04d%02d%02d', $year, $month, $day);
+
+    $credit = (float)($data[$indices['credit']] ?? 0.0);
+    $debit = (float)($data[$indices['debit']] ?? 0.0);
+    $amount = $credit > 0.0 ? $credit : -$debit;
+    if ($amount == 0.0) {
+        return ['transaction' => null, 'error' => null]; // skip empty
+    }
+
+    $checkNo = !empty($data[$indices['check']]) ? (string)$data[$indices['check']] : null;
+    $desc = strtoupper(trim((string)($data[$indices['description']] ?? '')));
+    if (strlen($desc) > 100) {
+        return [
+            'transaction' => null,
+            'error' => sprintf('Description too long at line %d', $lineNum),
+        ];
+    }
+
+    return [
+        'transaction' => [
+            'date' => $dateStr,
+            'amount' => $amount,
+            'no' => $checkNo,
+            'desc' => $desc,
+            'memo' => '',
+        ],
+        'error' => null,
+    ];
+}
+
+/**
+ * Determines transaction type from amount and check number.
+ *
+ * @param float       $amount The transaction amount (positive or negative).
+ * @param string|null $checkNo The check number, if any.
+ * @return int Transaction type: 1=Deposit, 2=Debit, 3=Check, 4=Fee
+ */
+function determine_transaction_type(float $amount, ?string $checkNo): int
+{
+    if ($amount >= 0) {
+        return 1; // Deposit
+    }
+    if (!empty($checkNo)) {
+        return 3; // Check
+    }
+    return 2; // Debit
+}
+
+/**
+ * Formats an amount for display.
+ *
+ * @param float $amount The amount.
+ * @return string Formatted amount string.
+ */
+function format_amount(float $amount): string
+{
+    return sprintf('%.2f', $amount);
+}
