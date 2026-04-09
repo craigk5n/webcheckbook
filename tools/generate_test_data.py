@@ -3,10 +3,19 @@
 Generate synthetic test data for WebCheckbook.
 
 Produces:
-  - tools/output/seed-data.sql        SQL to TRUNCATE and populate chk_account
-                                      and chk_trans for 18 months of activity
-  - tools/output/checking-bank.csv    Simulated bank CSV export for checking
-  - tools/output/savings-bank.csv     Simulated bank CSV export for savings
+  - tools/output/seed-data.sql            SQL to TRUNCATE and populate
+                                          chk_account and chk_trans for 18
+                                          months of activity
+  - tools/output/checking-YYYY-MM.csv     One "statement" CSV per period
+                                          for the checking account
+  - tools/output/savings-YYYY-MM.csv      One "statement" CSV per period
+                                          for the savings account
+
+Statements are split by calendar month by default. Pass --period quarter
+to emit one file per calendar quarter instead (e.g., savings-2045-Q4.csv).
+The running Balance column is carried across statements the way a real
+bank statement does — each period's opening balance equals the prior
+period's closing balance.
 
 The SQL file represents what the household has entered into WebCheckbook.
 The CSV files represent what the bank later reports, with realistic timing
@@ -26,9 +35,11 @@ Household profile:
     so reconcile.php has work to do
 
 Usage:
-    python3 tools/generate_test_data.py [--seed N] [--out DIR]
+    python3 tools/generate_test_data.py [--seed N] [--out DIR] \
+                                        [--period month|quarter]
     mysql -u <user> -p checkbook < tools/output/seed-data.sql
-    # Then import the CSVs via import.php in the browser.
+    # Then import each statement CSV via import.php in the browser,
+    # one statement at a time, to mirror the real reconcile workflow.
 
 Standard library only. No external dependencies.
 """
@@ -539,22 +550,35 @@ def write_sql(path: str, accounts: List[Account]) -> None:
         f.write("\n".join(lines))
 
 
-def write_csv(path: str, account: Account, rng: random.Random) -> None:
-    """Emit a bank-style CSV that mostly mirrors the account's transactions."""
-    rows = []
+@dataclass
+class BankEvent:
+    when: date
+    amount: float
+    description: str
+    check_no: Optional[int]
+    balance: float = 0.0  # running balance filled in after sorting
 
-    # Running balance from bank's perspective (same opening)
-    balance = account.opening_balance
 
-    # Build bank rows: most match user transactions with a date offset.
-    bank_events = []
+def build_bank_events(account: Account, rng: random.Random) -> List[BankEvent]:
+    """Return a sorted list of BankEvent rows the bank would report.
+
+    Mirrors most of the account's user transactions (with a posting-date
+    offset), drops anything flagged as uncleared, and injects a few
+    bank-only fees so reconciliation has surprises to catch.
+    """
+    events: List[BankEvent] = []
     for t in account.transactions:
         if not t.appears_in_bank:
             continue
         bank_when = t.when + timedelta(days=t.bank_date_offset_days)
         if bank_when > TODAY:
             bank_when = TODAY  # can't post in the future
-        bank_events.append((bank_when, t.amount, t.description, t.check_no))
+        events.append(BankEvent(
+            when=bank_when,
+            amount=t.amount,
+            description=t.description,
+            check_no=t.check_no,
+        ))
 
     # Inject a few bank-only fees spread across older months so the user has
     # something to discover when reconciling.
@@ -567,30 +591,77 @@ def write_csv(path: str, account: Account, rng: random.Random) -> None:
                 when = day_in_month(y, m, rng.randint(20, 27))
                 if when <= TODAY:
                     desc, amt = rng.choice(BANK_ONLY_FEES)
-                    bank_events.append((when, -amt, desc, None))
+                    events.append(BankEvent(
+                        when=when,
+                        amount=-amt,
+                        description=desc,
+                        check_no=None,
+                    ))
                     fee_months += 1
             m += 1
             if m > 12:
                 m = 1
                 y += 1
 
-    bank_events.sort(key=lambda e: e[0])
+    events.sort(key=lambda e: (e.when, e.description))
 
+    # Running balance from the bank's perspective, carried across periods.
+    balance = account.opening_balance
+    for ev in events:
+        balance += ev.amount
+        ev.balance = balance
+
+    return events
+
+
+def period_key(d: date, period: str) -> str:
+    """Return the statement period identifier a transaction belongs to.
+
+    Months are labeled "YYYY-MM"; quarters are labeled "YYYY-QN".
+    """
+    if period == "quarter":
+        q = (d.month - 1) // 3 + 1
+        return f"{d.year}-Q{q}"
+    return f"{d.year}-{d.month:02d}"
+
+
+def write_statement_csv(path: str, events: List[BankEvent]) -> None:
+    """Write a single bank statement CSV file for the given events."""
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Date", "Check", "Description", "Debit", "Credit", "Balance"])
-        for when, amount, desc, check_no in bank_events:
-            balance += amount
-            debit = f"{-amount:.2f}" if amount < 0 else ""
-            credit = f"{amount:.2f}" if amount > 0 else ""
+        for ev in events:
+            debit = f"{-ev.amount:.2f}" if ev.amount < 0 else ""
+            credit = f"{ev.amount:.2f}" if ev.amount > 0 else ""
             writer.writerow([
-                when.strftime("%-m/%-d/%Y"),
-                str(check_no) if check_no is not None else "",
-                desc,
+                ev.when.strftime("%-m/%-d/%Y"),
+                str(ev.check_no) if ev.check_no is not None else "",
+                ev.description,
                 debit,
                 credit,
-                f"{balance:.2f}",
+                f"{ev.balance:.2f}",
             ])
+
+
+def write_account_statements(
+    out_dir: str, slug: str, account: Account, rng: random.Random, period: str
+) -> List[str]:
+    """Write one CSV per statement period for the account. Returns file paths."""
+    events = build_bank_events(account, rng)
+
+    # Group preserving order (events are already date-sorted).
+    buckets: dict[str, List[BankEvent]] = {}
+    for ev in events:
+        key = period_key(ev.when, period)
+        buckets.setdefault(key, []).append(ev)
+
+    paths: List[str] = []
+    for key, bucket in buckets.items():
+        filename = f"{slug}-{key}.csv"
+        path = os.path.join(out_dir, filename)
+        write_statement_csv(path, bucket)
+        paths.append(path)
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -604,6 +675,8 @@ def main() -> None:
                         help="Random seed for reproducible output.")
     parser.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "output"),
                         help="Output directory (default: tools/output).")
+    parser.add_argument("--period", choices=("month", "quarter"), default="month",
+                        help="Statement period granularity (default: month).")
     args = parser.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -613,17 +686,21 @@ def main() -> None:
     savings = generate_savings(rng)
 
     sql_path = os.path.join(args.out, "seed-data.sql")
-    checking_csv = os.path.join(args.out, "checking-bank.csv")
-    savings_csv = os.path.join(args.out, "savings-bank.csv")
-
     write_sql(sql_path, [checking, savings])
-    write_csv(checking_csv, checking, rng)
-    write_csv(savings_csv, savings, rng)
+
+    checking_paths = write_account_statements(
+        args.out, "checking", checking, rng, args.period
+    )
+    savings_paths = write_account_statements(
+        args.out, "savings", savings, rng, args.period
+    )
 
     total_txns = len(checking.transactions) + len(savings.transactions)
     print(f"Wrote {sql_path}")
-    print(f"Wrote {checking_csv}")
-    print(f"Wrote {savings_csv}")
+    print(f"Wrote {len(checking_paths)} checking statement(s) "
+          f"({args.period}ly) to {args.out}")
+    print(f"Wrote {len(savings_paths)} savings statement(s) "
+          f"({args.period}ly) to {args.out}")
     print(f"Checking: {len(checking.transactions)} transactions, "
           f"final balance "
           f"${checking.opening_balance + sum(t.amount for t in checking.transactions):,.2f}")
@@ -634,8 +711,8 @@ def main() -> None:
     print()
     print("Next steps:")
     print(f"  mysql -u <user> -p checkbook < {sql_path}")
-    print("  Then import the CSVs via import.php in the browser,")
-    print("  or copy them somewhere convenient before reconciling.")
+    print("  Then import each statement CSV via import.php in the browser,")
+    print("  one period at a time, to mirror the real reconcile workflow.")
 
 
 if __name__ == "__main__":
