@@ -239,4 +239,70 @@ class CsvParsingTest extends TestCase
         // Deposit
         $this->assertEqualsWithDelta(3000.00, $transactions[2]['amount'], 0.001);
     }
+
+    // --- csv_read_row() tests ---
+
+    /**
+     * Writes $content to a temp file and returns every parsed row.
+     */
+    private function readAllRows(string $content): array
+    {
+        $path = tempnam(sys_get_temp_dir(), 'csvtest');
+        file_put_contents($path, $content);
+        $fd = fopen($path, 'r');
+        $rows = [];
+        while (($row = csv_read_row($fd)) !== false) {
+            $rows[] = $row;
+        }
+        fclose($fd);
+        unlink($path);
+        return $rows;
+    }
+
+    public function testReadsPlainRows(): void
+    {
+        $rows = $this->readAllRows("a,b,c\n1,2,3\n");
+        $this->assertCount(2, $rows);
+        $this->assertSame(['a', 'b', 'c'], $rows[0]);
+        $this->assertSame(['1', '2', '3'], $rows[1]);
+    }
+
+    public function testQuotedFieldEndingInBackslashDoesNotSwallowTheRecord(): void
+    {
+        // Banks emit descriptions ending in a backslash. With PHP's default
+        // escape character this merged two records into one oversized row.
+        $csv = "Date,Description,Credit\n"
+             . "2/17/2026,\"TAX REF REF*KNUD*12/2025*TAX REFUND*30\\\",9686.00\n"
+             . "2/12/2026,\"VA DEPT TAXATION\",612.00\n";
+        $rows = $this->readAllRows($csv);
+
+        $this->assertCount(3, $rows);
+        $this->assertCount(3, $rows[1], 'row must not absorb the following line');
+        $this->assertSame('TAX REF REF*KNUD*12/2025*TAX REFUND*30\\', $rows[1][1]);
+        $this->assertSame('9686.00', $rows[1][2]);
+        $this->assertSame(['2/12/2026', 'VA DEPT TAXATION', '612.00'], $rows[2]);
+    }
+
+    public function testDoubledQuoteStillEscapesAQuote(): void
+    {
+        // RFC 4180: "" is the escape, and it must keep working.
+        $rows = $this->readAllRows("a,\"say \"\"hi\"\" now\",c\n");
+        $this->assertSame(['a', 'say "hi" now', 'c'], $rows[0]);
+    }
+
+    public function testEmbeddedCommaAndNewlineInQuotedField(): void
+    {
+        $rows = $this->readAllRows("a,\"one, two\",c\n");
+        $this->assertSame(['a', 'one, two', 'c'], $rows[0]);
+    }
+
+    public function testLongFieldIsNotTruncated(): void
+    {
+        // The old call passed a 1000-byte limit, which split long rows.
+        $long = str_repeat('X', 3000);
+        $rows = $this->readAllRows("a,\"$long\",c\n");
+        $this->assertCount(1, $rows);
+        $this->assertSame(3, count($rows[0]));
+        $this->assertSame(3000, strlen($rows[0][1]));
+    }
 }

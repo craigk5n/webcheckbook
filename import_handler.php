@@ -53,7 +53,7 @@ if ($fd === false) {
     fatalError(translate('Error opening uploaded file'));
 }
 
-$headerRow = fgetcsv($fd, 1000, ',');
+$headerRow = csv_read_row($fd);
 if ($headerRow === false) {
     fclose($fd);
     fatalError(translate('Error reading CSV file'));
@@ -65,7 +65,7 @@ $errors = validate_csv_headers($indices);
 
 if (empty($errors)) {
     $line = 1;
-    while (($data = fgetcsv($fd, 1000, ',')) !== false) {
+    while (($data = csv_read_row($fd)) !== false) {
         $line++;
         $result = parse_csv_row($data, $indices, $num_header, $line);
 
