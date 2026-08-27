@@ -209,3 +209,207 @@ function autocomplete(inp, arr) {
         closeAllLists(e.target);
     });
 }
+
+/**
+ * Wires up the confirmation step for editing a reconciled transaction.
+ *
+ * Only the date and check number are editable on a reconciled transaction. Save
+ * stays disabled until one of them actually changes, and the change has to be
+ * confirmed in a modal that spells out exactly what is changing. Without
+ * JavaScript the form posts straight through and the server renders an
+ * equivalent confirmation page.
+ *
+ * @param {Object} config - ids of the form, save button, modal, and change list
+ */
+function initReconciledEdit(config) {
+    const form = document.getElementById(config.formId);
+    const saveBtn = document.getElementById(config.saveButtonId);
+    const confirmField = document.getElementById(config.confirmFieldId);
+    const modalEl = document.getElementById(config.modalId);
+    const confirmBtn = document.getElementById(config.confirmButtonId);
+    const changeList = document.getElementById(config.changeListId);
+
+    if (!form || !saveBtn || !confirmField || !modalEl || !confirmBtn || !changeList) {
+        return;
+    }
+
+    // Without Bootstrap there is no modal to show. Leave the form alone so it
+    // posts straight through and the server renders its confirmation page.
+    if (typeof bootstrap === "undefined" || !bootstrap.Modal) {
+        return;
+    }
+
+    const dateInput = form.elements["date"];
+    const numInput = form.elements["num"];
+    const labels = config.labels || {};
+    const noneLabel = labels.none || "(none)";
+
+    const originalDate = normalizeDateValue(dateInput.value);
+    const originalNum = normalizeCheckNumber(numInput.value);
+
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
+    function currentChanges() {
+        const changes = [];
+        const newDate = normalizeDateValue(dateInput.value);
+        const newNum = normalizeCheckNumber(numInput.value);
+
+        if (newDate !== originalDate) {
+            changes.push({
+                label: labels.date || "Date",
+                from: originalDate || noneLabel,
+                to: newDate || noneLabel
+            });
+        }
+        if (newNum !== originalNum) {
+            changes.push({
+                label: labels.num || "ChkNo",
+                from: originalNum || noneLabel,
+                to: newNum || noneLabel
+            });
+        }
+        return changes;
+    }
+
+    function refreshSaveState() {
+        const changed = currentChanges().length > 0;
+        saveBtn.disabled = !changed;
+        saveBtn.title = changed ? "" : "No changes to save";
+    }
+
+    function renderChanges(changes) {
+        changeList.replaceChildren();
+        changes.forEach(function (change) {
+            const item = document.createElement("li");
+            item.className = "list-group-item d-flex justify-content-between align-items-center px-0";
+
+            const label = document.createElement("span");
+            label.className = "fw-semibold";
+            label.textContent = change.label;
+
+            const values = document.createElement("span");
+            const from = document.createElement("span");
+            from.className = "text-muted text-decoration-line-through";
+            from.textContent = change.from;
+            const arrow = document.createElement("i");
+            arrow.className = "bi bi-arrow-right mx-2";
+            arrow.setAttribute("aria-hidden", "true");
+            const to = document.createElement("span");
+            to.className = "fw-semibold";
+            to.textContent = change.to;
+
+            values.appendChild(from);
+            values.appendChild(arrow);
+            values.appendChild(to);
+            item.appendChild(label);
+            item.appendChild(values);
+            changeList.appendChild(item);
+        });
+    }
+
+    dateInput.addEventListener("input", refreshSaveState);
+    numInput.addEventListener("input", refreshSaveState);
+
+    form.addEventListener("submit", function (e) {
+        if (e.submitter && e.submitter.dataset.confirmDelete === "1") {
+            return; // the delete button runs its own confirmation
+        }
+        if (confirmField.value === "1") {
+            return; // already confirmed
+        }
+        e.preventDefault();
+
+        const changes = currentChanges();
+        if (changes.length === 0) {
+            return;
+        }
+        renderChanges(changes);
+        modal.show();
+    });
+
+    // Default focus to Cancel so the risky action is never the one-keypress path.
+    modalEl.addEventListener("shown.bs.modal", function () {
+        const cancelBtn = modalEl.querySelector("[data-bs-dismiss='modal'].btn-secondary");
+        if (cancelBtn) {
+            cancelBtn.focus();
+        }
+    });
+
+    confirmBtn.addEventListener("click", function () {
+        confirmField.value = "1";
+        form.submit();
+    });
+
+    refreshSaveState();
+}
+
+/**
+ * Normalize a typed date for comparison/display ("1/5" => "1/5/2026").
+ */
+function normalizeDateValue(value) {
+    const trimmed = (value || "").trim();
+    if (trimmed === "") return "";
+    const cleaned = clean_date(trimmed);
+    return cleaned && cleaned.indexOf("NaN") === -1 ? cleaned : trimmed;
+}
+
+/**
+ * Normalize a check number for comparison ("0123" and "123" are the same).
+ */
+function normalizeCheckNumber(value) {
+    const trimmed = (value || "").trim();
+    if (trimmed === "") return "";
+    return /^\d+$/.test(trimmed) ? String(parseInt(trimmed, 10)) : trimmed;
+}
+
+/**
+ * Wires up the delete confirmation on the edit transaction page.
+ *
+ * The delete button is a submit button pointing at the delete handler via
+ * formaction, so without JavaScript it posts straight through and the server
+ * renders an equivalent confirmation page. With JavaScript we intercept it and
+ * confirm in a modal first.
+ *
+ * @param {Object} config - ids of the form, delete button, modal, and confirm field
+ */
+function initDeleteTransaction(config) {
+    const form = document.getElementById(config.formId);
+    const deleteBtn = document.getElementById(config.deleteButtonId);
+    const confirmField = document.getElementById(config.confirmFieldId);
+    const modalEl = document.getElementById(config.modalId);
+    const confirmBtn = document.getElementById(config.confirmButtonId);
+
+    if (!form || !deleteBtn || !confirmField || !modalEl || !confirmBtn) {
+        return;
+    }
+
+    // Without Bootstrap there is no modal; let the post reach the server, which
+    // renders its own confirmation page.
+    if (typeof bootstrap === "undefined" || !bootstrap.Modal) {
+        return;
+    }
+
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+
+    deleteBtn.addEventListener("click", function (e) {
+        if (confirmField.value === "1") {
+            return; // already confirmed, let the submit through
+        }
+        e.preventDefault();
+        modal.show();
+    });
+
+    // Default focus to Cancel so the destructive action is never one keypress away.
+    modalEl.addEventListener("shown.bs.modal", function () {
+        const cancelBtn = modalEl.querySelector("[data-bs-dismiss='modal'].btn-secondary");
+        if (cancelBtn) {
+            cancelBtn.focus();
+        }
+    });
+
+    confirmBtn.addEventListener("click", function () {
+        confirmField.value = "1";
+        form.action = config.action;
+        form.submit();
+    });
+}
