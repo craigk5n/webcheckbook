@@ -4,12 +4,6 @@ declare(strict_types=1);
 /**
  * Displays a paginated list of transactions for a specific account.
  *
- * Retrieves account information and transactions for the specified account ID,
- * displaying them in a table with pagination controls. Updated for PHP 8 best practices
- * by Grok (xAI) in September 2025. Changes include strict typing, prepared statements
- * to prevent SQL injection, consistent HTML escaping, improved error handling,
- * and removal of unused $doUpdate variable.
- *
  * @package Checkbook
  */
 
@@ -38,7 +32,7 @@ print_heading($title);
 
 print_account_info($account);
 
-echo '<p><a href="edit_account.php?acct=' . $acct . '">' . translate('Edit Account') . '</a></p>';
+echo '<p><a class="btn btn-sm btn-outline-secondary" href="edit_account.php?acct=' . $acct . '">' . translate('Edit Account') . '</a></p>';
 
 $sql = 'SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, chk_description, chk_reconciled ' .
        'FROM chk_trans WHERE chk_acct_id = ? ORDER BY chk_date ASC';
@@ -49,29 +43,33 @@ $bank_bal = 0.0;
 $last_date = '';
 if ($res) {
     while ($row = dbi_fetch_row($res)) {
-        $class = $row[3] > 0 ? 'deposit' : (count($rows) % 2 === 0 ? 'withdrawal-even' : 'withdrawal-odd');
+        $rowClass = $row[3] > 0 ? 'table-success' : '';
         if (empty($rows) || $row[4] !== $last_date) {
-            $rows[] = '<tr><td colspan="7" style="height: 1px; background-color: #000;"></td></tr>';
+            $rows[] = '<tr><td colspan="7" class="p-0" style="height: 2px; background-color: #dee2e6;"></td></tr>';
         }
         $bal += (float)$row[3];
         $bank_bal += $row[6] === 'Y' ? (float)$row[3] : 0.0;
+        $reconciled = ($row[6] === 'Y');
+        $badge = $reconciled
+            ? '<span class="badge bg-success">R</span>'
+            : '<span class="badge bg-secondary">-</span>';
         $rows[] = sprintf(
-            '<tr>' .
-            '<td class="%s"><a href="edit_trans.php?acct=%d&trans=%d">%s</a></td>' .
-            '<td class="%s">%s</td>' .
-            '<td class="%s">%s</td>' .
-            '<td class="%s" align="right">%.2f</td>' .
-            '<td class="%s" align="right">%.2f</td>' .
-            '<td class="%s" align="right"><img src="%s" alt="rec" /></td>' .
-            '<td class="%s" align="right">%.2f</td>' .
+            '<tr class="%s">' .
+            '<td><a href="edit_trans.php?acct=%d&trans=%d">%s</a></td>' .
+            '<td>%s</td>' .
+            '<td>%s</td>' .
+            '<td class="text-end">%.2f</td>' .
+            '<td class="text-end">%.2f</td>' .
+            '<td>%s</td>' .
+            '<td class="text-end">%.2f</td>' .
             '</tr>',
-            $class, $acct, (int)$row[0], date_to_str((string)$row[4], '__mm__/__dd__/__yyyy__', false),
-            $class, empty($row[2]) ? '-' : htmlentities((string)$row[2]),
-            $class, htmlentities((string)$row[5]),
-            $class, (float)$row[3],
-            $class, $bal,
-            $class, $row[6] === 'Y' ? 'images/reconciled.png' : 'images/not_reconciled.png',
-            $class, $bank_bal
+            $rowClass, $acct, (int)$row[0], date_to_str((string)$row[4], '__mm__/__dd__/__yyyy__', false),
+            empty($row[2]) ? '-' : htmlentities((string)$row[2]),
+            htmlentities((string)$row[5]),
+            (float)$row[3],
+            $bal,
+            $badge,
+            $bank_bal
         );
         $last_date = (string)$row[4];
     }
@@ -80,7 +78,7 @@ if ($res) {
     fatalError(translate('Database error') . ': Unable to retrieve transactions.');
 }
 
-$rows[] = '<tr><td colspan="7" style="height: 1px; background-color: #000;"></td></tr>';
+$rows[] = '<tr><td colspan="7" class="p-0" style="height: 2px; background-color: #dee2e6;"></td></tr>';
 
 $first = max((int)$first, 0);
 $first = empty($first) ? max(count($rows) - NUM_DISPLAY, 0) : $first;
@@ -92,14 +90,29 @@ foreach ($display_rows as $row) {
 }
 close_table();
 
-?>
+// Pagination
+$totalRows = count($rows);
+$prevFirst = max($first - NUM_DISPLAY, 0);
+$nextFirst = min($first + NUM_DISPLAY, $totalRows - 1);
+$hasPrev = ($first > 0);
+$hasNext = ($first + NUM_DISPLAY < $totalRows);
 
-<form action="list.php" method="GET">
-    <input type="hidden" name="acct" value="<?php echo htmlspecialchars((string)$acct); ?>" />
-    <input type="hidden" name="first" value="<?php echo htmlspecialchars((string)max($first - NUM_DISPLAY, 0)); ?>" />
-    <input type="submit" value="<?php echo translate('Previous 100'); ?>" />
-</form>
+echo '<nav><ul class="pagination">';
+if ($hasPrev) {
+    echo '<li class="page-item"><a class="page-link" href="list.php?acct=' . $acct . '&first=0">First</a></li>';
+    echo '<li class="page-item"><a class="page-link" href="list.php?acct=' . $acct . '&first=' . $prevFirst . '">Previous</a></li>';
+} else {
+    echo '<li class="page-item disabled"><span class="page-link">First</span></li>';
+    echo '<li class="page-item disabled"><span class="page-link">Previous</span></li>';
+}
+if ($hasNext) {
+    echo '<li class="page-item"><a class="page-link" href="list.php?acct=' . $acct . '&first=' . $nextFirst . '">Next</a></li>';
+    echo '<li class="page-item"><a class="page-link" href="list.php?acct=' . $acct . '&first=' . max($totalRows - NUM_DISPLAY, 0) . '">Last</a></li>';
+} else {
+    echo '<li class="page-item disabled"><span class="page-link">Next</span></li>';
+    echo '<li class="page-item disabled"><span class="page-link">Last</span></li>';
+}
+echo '</ul></nav>';
 
-<?php
 print_trailer();
 ?>

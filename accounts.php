@@ -62,9 +62,9 @@ print_heading(translate('Accounts'));
 open_table(['Bank', 'Acct Name', 'Acct No', 'Start Date', 'End Date', 'Balance', 'Bank Bal']);
 foreach ($accounts as $account) {
     echo "<tr>\n";
-    print_table_cell(htmlentities($account['bank']));
-    echo '<td><a href="list.php?acct=' . $account['acct_id'] . '">' . htmlentities($account['name']) . "</a></td>\n";
-    print_table_cell(htmlentities($account['account_no']));
+    print_table_cell($account['bank']);
+    echo '<td><a href="list.php?acct=' . $account['acct_id'] . '">' . htmlentities($account['name']) . '</a> <a href="edit_account.php?acct=' . $account['acct_id'] . '" class="badge bg-secondary text-decoration-none">Edit</a>' . "</td>\n";
+    print_table_cell($account['account_no']);
     print_table_cell($account['start_date'] ? date_to_str($account['start_date'], '__mm__/__dd__/__yyyy__', false) : '');
     print_table_cell($account['end_date'] ? date_to_str($account['end_date'], '__mm__/__dd__/__yyyy__', false) : '');
     print_table_cell(sprintf('%.02f', $account['balance']));

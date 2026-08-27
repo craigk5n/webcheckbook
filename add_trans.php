@@ -32,36 +32,42 @@ print_account_info($Account);
 
 ?>
 
-<p><b>Last check number:</b> <?php echo htmlentities($maxCheck); ?> </p>
+<p><strong>Last check number:</strong> <?php echo htmlentities($maxCheck); ?></p>
 
 <form action="add_trans_handler.php" method="POST">
 <input type="hidden" name="acct" value="<?php echo $acct; ?>" />
 
-<table border="0" class="add_transactions_table" id="add_transactions_table">
+<div class="table-responsive">
+<table class="table table-sm table-bordered add_transactions_table" id="add_transactions_table">
+<thead class="table-dark">
 <tr><th>Date</th><th>Type</th><th>ChkNo</th><th>Description</th><th>Amount</th></tr>
+</thead>
+<tbody>
 <?php
 for ($i = 0; $i < $num; $i++) {
-    echo "<tr><td><input size=\"11\" class=\"date\" id=\"date_$i\" name=\"date_$i\"  ";
+    echo "<tr><td><input type=\"text\" class=\"form-control form-control-sm date\" id=\"date_$i\" name=\"date_$i\" ";
     if ($i == 0)
         echo "value=\"" . date("m/d/Y") . "\" ";
     echo "onfocus=\"steal_date(this.form,$i,$num)\" ";
     echo "onBlur=\"this.value = clean_date(this.value)\" ";
     echo "/></td>\n";
-    echo "<td><select name=\"type_$i\"><option value=\"2\">Debit<option value=\"3\">Check<option value=\"4\">Charge/Fee<option value=\"1\">Deposit</select></td>";
-    echo "<td><input size=\"7\" id=\"num_$i\" name=\"num_$i\" ";
+    echo "<td><select class=\"form-select form-select-sm\" name=\"type_$i\"><option value=\"2\">Debit<option value=\"3\">Check<option value=\"4\">Charge/Fee<option value=\"1\">Deposit</select></td>";
+    echo "<td><input type=\"text\" class=\"form-control form-control-sm\" id=\"num_$i\" name=\"num_$i\" ";
     echo "onfocus=\"suggest_check_number(this.form,$i,$num)\" ";
     echo "/></td>\n";
     echo "<td>";
     echo '<div class="autocomplete">';
-    echo "<input class=\"autocomplete\" autocomplete=\"off\" size=\"40\" id=\"description_$i\" name=\"description_$i\" " .
+    echo "<input type=\"text\" class=\"form-control form-control-sm autocomplete\" autocomplete=\"off\" id=\"description_$i\" name=\"description_$i\" " .
         "onBlur=\"this.value = this.value.toUpperCase();\" placeholder=\"Description\" /></div></td>\n";
-    echo "<td><input size=\"8\" name=\"amount_$i\" onFocus=\"onFocusAmount(this.form,$i);\" /></td>\n";
+    echo "<td><input type=\"text\" class=\"form-control form-control-sm\" name=\"amount_$i\" onFocus=\"onFocusAmount(this.form,$i);\" /></td>\n";
     echo "</tr>\n";
 }
 ?>
+</tbody>
 </table>
+</div>
 
-<input type="submit" value="Add" />
+<button type="submit" class="btn btn-primary">Add</button>
 </form>
 
 <script src="js/checkbook.js"></script>

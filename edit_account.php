@@ -4,10 +4,6 @@ declare(strict_types=1);
 /**
  * Displays a form to edit account details in the checkbook application.
  *
- * Retrieves account information for the specified account ID and presents a form
- * to edit bank, account name, account number, and archived status. Updated for PHP 8
- * best practices by Grok (xAI) in September 2025.
- * 
  * @package Checkbook
  */
 
@@ -67,30 +63,43 @@ print_heading($title);
 <form action="edit_account_handler.php" method="POST">
     <input type="hidden" name="acct" value="<?php echo htmlspecialchars((string)$account['acct_id']); ?>" />
 
-    <table border="0">
-        <tr>
-            <td><b><?php echo translate('Bank'); ?>:</b></td>
-            <td><input size="25" name="bank" value="<?php echo htmlspecialchars($account['bank']); ?>" /></td>
-        </tr>
-        <tr>
-            <td><b><?php echo translate('Account Name'); ?>:</b></td>
-            <td><input size="25" name="name" value="<?php echo htmlspecialchars($account['name']); ?>" /></td>
-        </tr>
-        <tr>
-            <td><b><?php echo translate('Account No.'); ?>:</b></td>
-            <td><input size="25" name="account_no" value="<?php echo htmlspecialchars($account['account_no']); ?>" /></td>
-        </tr>
-        <tr>
-            <td><b><?php echo translate('Status'); ?>:</b></td>
-            <td>
-                <input type="radio" name="is_archived" value="N" <?php echo $account['is_archived'] === 'N' ? 'checked' : ''; ?> /> <?php echo translate('Active'); ?>
-                &nbsp;&nbsp;
-                <input type="radio" name="is_archived" value="Y" <?php echo $account['is_archived'] === 'Y' ? 'checked' : ''; ?> /> <?php echo translate('Archived'); ?>
-            </td>
-        </tr>
-    </table>
+    <div class="row mb-3">
+        <label for="bank" class="col-sm-2 col-form-label"><?php echo translate('Bank'); ?>:</label>
+        <div class="col-sm-6">
+            <input type="text" class="form-control" id="bank" name="bank" value="<?php echo htmlspecialchars($account['bank']); ?>" />
+        </div>
+    </div>
+    <div class="row mb-3">
+        <label for="name" class="col-sm-2 col-form-label"><?php echo translate('Account Name'); ?>:</label>
+        <div class="col-sm-6">
+            <input type="text" class="form-control" id="name" name="name" value="<?php echo htmlspecialchars($account['name']); ?>" />
+        </div>
+    </div>
+    <div class="row mb-3">
+        <label for="account_no" class="col-sm-2 col-form-label"><?php echo translate('Account No.'); ?>:</label>
+        <div class="col-sm-6">
+            <input type="text" class="form-control" id="account_no" name="account_no" value="<?php echo htmlspecialchars($account['account_no']); ?>" />
+        </div>
+    </div>
+    <div class="row mb-3">
+        <label class="col-sm-2 col-form-label"><?php echo translate('Status'); ?>:</label>
+        <div class="col-sm-6">
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="is_archived" id="statusActive" value="N" <?php echo $account['is_archived'] === 'N' ? 'checked' : ''; ?> />
+                <label class="form-check-label" for="statusActive"><?php echo translate('Active'); ?></label>
+            </div>
+            <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="is_archived" id="statusArchived" value="Y" <?php echo $account['is_archived'] === 'Y' ? 'checked' : ''; ?> />
+                <label class="form-check-label" for="statusArchived"><?php echo translate('Archived'); ?></label>
+            </div>
+        </div>
+    </div>
 
-    <input type="submit" value="<?php echo translate('Save'); ?>" />
+    <div class="row">
+        <div class="col-sm-6 offset-sm-2">
+            <button type="submit" class="btn btn-primary"><?php echo translate('Save'); ?></button>
+        </div>
+    </div>
 </form>
 
 <?php

@@ -15,8 +15,8 @@ if (empty($acct)) {
 
 $Account = get_account_info($acct);
 
-print_header(translate('Account') . ': ' . $Account['name']);
-print_heading(translate('Search') . ' ' . translate('Account') . ': ' . $Account['name']);
+print_header(translate('Reports') . ': ' . $Account['name']);
+print_heading(translate('Reports') . ' ' . translate('Account') . ': ' . $Account['name']);
 print_account_info($Account);
 
 $start = getValue('start');
@@ -54,29 +54,39 @@ for ($i = $first; $i <= $last; $i++) {
 }
 
 ?>
-<h3>Duplicate Check Numbers</h3>
-<ul>
-<?php
-if (count($dups) == 0)
-    echo "<li>None</li>\n";
-for ($i = 0; $i < count($dups); $i++) {
-    print "<li> " . $dups[$i] . " </li>\n";
-}
-?>
-</ul>
+<div class="card mb-3">
+    <div class="card-header"><h5 class="mb-0">Duplicate Check Numbers</h5></div>
+    <div class="card-body">
+<?php if (count($dups) == 0): ?>
+        <p class="text-muted mb-0">None</p>
+<?php else: ?>
+        <div class="d-flex flex-wrap gap-1">
+<?php foreach ($dups as $d): ?>
+            <span class="badge bg-danger"><?php echo $d; ?></span>
+<?php endforeach; ?>
+        </div>
+<?php endif; ?>
+    </div>
+</div>
 
-<h3>Missing Check Numbers</h3>
-<ul>
-<?php
-if (count($missing) == 0)
-    echo "<li>None</li>\n";
-for ($i = 0; $i < count($missing); $i++) {
-    print "<li> " . $missing[$i] . " </li>\n";
-}
-?>
-</ul>
+<div class="card mb-3">
+    <div class="card-header"><h5 class="mb-0">Missing Check Numbers</h5></div>
+    <div class="card-body">
+<?php if (count($missing) == 0): ?>
+        <p class="text-muted mb-0">None</p>
+<?php else: ?>
+        <div class="d-flex flex-wrap gap-1">
+<?php foreach ($missing as $m): ?>
+            <span class="badge bg-warning text-dark"><?php echo $m; ?></span>
+<?php endforeach; ?>
+        </div>
+<?php endif; ?>
+    </div>
+</div>
 
-<h3>Unreconciled Transactions</h3>
+<div class="card mb-3">
+    <div class="card-header"><h5 class="mb-0">Unreconciled Transactions</h5></div>
+    <div class="card-body">
 <?php
 
 // Get posting date of most recent reconciled transaction
@@ -89,11 +99,10 @@ $lastDate = $row[0] ?? '';
 dbi_free_result($res);
 
 if (empty($lastDate)) {
-    echo "<p>Nothing reconciled yet.</p>";
+    echo '<p class="text-muted mb-0">Nothing reconciled yet.</p>';
 } else {
-    ?><p>Showing transactions before <b><?php
-    echo date_to_str($lastDate, '__mm__/__dd__/__yyyy__', false);
-    echo "</b></p>\n";
+    echo '<p>Showing transactions before <strong>' .
+        date_to_str($lastDate, '__mm__/__dd__/__yyyy__', false) . '</strong></p>' . "\n";
 
     $sql = 'SELECT chk_trans_id, chk_type, chk_no, chk_amount, chk_date, chk_description ' .
            'FROM chk_trans WHERE chk_reconciled = ? AND chk_date <= ? AND chk_acct_id = ? ' .
@@ -120,10 +129,20 @@ if (empty($lastDate)) {
         }
     }
     dbi_free_result($res);
-    close_table();
+    if ($cnt > 0) {
+        close_table();
+    } else {
+        echo '<p class="text-muted mb-0">None</p>';
+    }
 }
+?>
+    </div>
+</div>
 
-echo "<h3>Incorrect Reconciled Amounts</h3>\n";
+<div class="card mb-3">
+    <div class="card-header"><h5 class="mb-0">Incorrect Reconciled Amounts</h5></div>
+    <div class="card-body">
+<?php
 
 $sql = 'SELECT b.chk_acct_id, b.chk_statement_id, b.chk_sequence, ' .
     'b.chk_no, b.chk_amount, b.chk_date, b.chk_description, ' .
@@ -162,30 +181,36 @@ while ($row = dbi_fetch_row($res)) {
         continue;
     $rowNum++;
     $url = "edit_trans.php?acct=" . $acct . "&trans=" . (int)$trans['bank.trans_id'];
-    print "<tr>";
-    $odd = ($rowNum % 2 > 0) ? 'odd' : 'even';
-    $css = ($trans['bank.amount'] > 0.0) ? 'deposit' : "withdrawal-$odd";
-    print "<td class=\"$css\" align=\"right\">" .
+    $rowClass = ($trans['bank.amount'] > 0.0) ? 'table-success' : '';
+    print "<tr class=\"$rowClass\">";
+    print "<td class=\"text-end\">" .
         (empty($trans['bank.chk_no']) ? '-' : htmlentities((string)$trans['bank.chk_no'])) . "</td>";
-    print "<td class=\"$css\" align=\"right\">" .
+    print "<td class=\"text-end\">" .
         sprintf('%.2f', $trans['bank.amount']) . "</td>";
-    print "<td class=\"$css\">" .
+    print "<td>" .
         date_to_str($trans['bank.date'], '__mm__/__dd__/__yyyy__', false) . "</td>";
-    print "<td class=\"$css\">" .
+    print "<td>" .
         htmlentities($trans['bank.description']) . "</td>";
-    print "<td class=\"$css\" align=\"right\">" .
+    print "<td class=\"text-end\">" .
         (empty($trans['my.chk_no']) ? '-' : htmlentities((string)$trans['my.chk_no'])) . "</td>";
-    print "<td class=\"$css\" align=\"right\">" .
+    print "<td class=\"text-end\">" .
         sprintf('%.2f', $trans['my.amount']) . "</td>";
-    print "<td class=\"$css\"><a href=\"$url\">" .
+    print "<td><a href=\"$url\">" .
         date_to_str($trans['my.date'], '__mm__/__dd__/__yyyy__', false) . "</a></td>";
-    print "<td class=\"$css\">" .
+    print "<td>" .
         htmlentities($trans['my.description']) . "</td>";
-    print "<td class=\"$css\">" .
+    print "<td>" .
         htmlentities($trans['my.memo'] ?? '') . "</td>";
     print "</tr>\n";
 }
 dbi_free_result($res);
 close_table();
+if ($rowNum == 0) {
+    echo '<p class="text-muted">None</p>';
+}
+?>
+    </div>
+</div>
 
+<?php
 print_trailer();
