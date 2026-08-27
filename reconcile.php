@@ -127,26 +127,35 @@ $row = dbi_fetch_row($res);
 $withdrawals = sprintf('%.2f', 0.0 - (float)($row[0] ?? 0));
 dbi_free_result($res);
 
-print "<br><table border=\"0\">\n" .
-    "<tr><td>Statement:</td><td>" . htmlentities($statementName) . "</td></tr>\n" .
-    "<tr><td>Start Date:</td><td>" . $startDate . "</td></tr>\n" .
-    "<tr><td>End Date:</td><td>" . $endDate . "</td></tr>\n" .
-    "<tr><td>Deposits:</td><td>" . $deposits . "</td></tr>\n" .
-    "<tr><td>Withdrawals:</td><td>" . $withdrawals . "</td></tr>\n" .
-    "<tr><td valign=\"top\">Progress:</td><td>" . $numDone . ' of ' . $count . " (" . $percent . " %)" .
-    '<div class="Progress">' .
-    '<progress max="100" value="' . $progress . '" class="Progress-main" aria-labelledby="Progress-id">' .
-    '<div class="Progress-bar" role="presentation">' .
-    '<span class="Progress-value" style="width: ' . $progress . '%;">&nbsp;' .
-    '</span>' .
-    '</div>' .
-    '</progress>' .
-    '</div>' .
-    "</td></tr>\n" .
-    "</table>\n<br>";
+?>
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-sm-6">
+                <table class="table table-sm table-borderless mb-0">
+                    <tr><td class="fw-bold">Statement:</td><td><?php echo htmlentities($statementName); ?></td></tr>
+                    <tr><td class="fw-bold">Start Date:</td><td><?php echo $startDate; ?></td></tr>
+                    <tr><td class="fw-bold">End Date:</td><td><?php echo $endDate; ?></td></tr>
+                    <tr><td class="fw-bold">Deposits:</td><td><?php echo $deposits; ?></td></tr>
+                    <tr><td class="fw-bold">Withdrawals:</td><td><?php echo $withdrawals; ?></td></tr>
+                </table>
+            </div>
+            <div class="col-sm-6">
+                <div class="fw-bold mb-1">Progress: <?php echo $numDone . ' of ' . $count . ' (' . $percent . ' %)'; ?></div>
+                <div class="progress" style="height: 20px;">
+                    <div class="progress-bar bg-info" role="progressbar" style="width: <?php echo $progress; ?>%"
+                         aria-valuenow="<?php echo $progress; ?>" aria-valuemin="0" aria-valuemax="100">
+                        <?php echo $percent; ?>%
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<?php
 
 if ($allDone && empty($seq)) {
-    echo "<p>All transactions for this statement have been reconciled.</p>\n";
+    echo '<div class="alert alert-success">All transactions for this statement have been reconciled.</div>' . "\n";
 } else {
     $sql = 'SELECT chk_no, chk_amount, chk_date, chk_description, chk_memo, chk_trans_id, chk_sequence ' .
            'FROM chk_bank_trans WHERE chk_acct_id = ? AND chk_statement_id = ?' .
@@ -195,17 +204,18 @@ if ($allDone && empty($seq)) {
                         strtolower($descPrior));
                 }
                 $chkNumMatches = $matches[$i]['no'] != '' && $matches[$i]['no'] == $trans['no'];
-                $selected = ($matches[$i]['amount'] == $trans['amount']) && ($textFound || $chkNumMatches);
-                $enabled = ($matches[$i]['amount'] == $trans['amount']);
+                $amountMatches = abs($matches[$i]['amount'] - $trans['amount']) < 0.005;
+                $selected = $amountMatches && ($textFound || $chkNumMatches);
+                $enabled = $amountMatches;
                 print_transaction($matches[$i], $i == 0, $i == count($matches) - 1,
                     'trans_id', $matches[$i]['trans_id'], $selected, $enabled, !$enabled);
             }
 
             if (count($matches) == 0 && empty($trans['trans_id'])) {
-                echo "<p><b>No similar transactions found!</b></p>\n";
+                echo '<div class="alert alert-warning"><strong>No similar transactions found!</strong></div>' . "\n";
             } else {
                 if (empty($trans['trans_id']))
-                    print "<input type=\"submit\" value=\"Reconcile Selected\" />\n";
+                    print '<button type="submit" class="btn btn-primary mb-3">Reconcile Selected</button>' . "\n";
             }
 
             // Add new transaction and reconcile with it
@@ -213,30 +223,30 @@ if ($allDone && empty($seq)) {
             if (empty($d))
                 $d = $trans['description'];
 
-            echo "<br>";
             $desc = preg_replace('/\s+/', ' ', $trans['description']);
-            print "<p>Add New Transaction:</p>";
+            echo '<h5 class="mt-3">Add New Transaction:</h5>' . "\n";
             $arr = [translate('Date'), translate('Chk#'), translate('Amount'), translate('Description'), translate('Memo')];
             open_table($arr);
             print "<tr>";
             print_table_cell(
-                '<input length="10" name="date" value="' .
+                '<input type="text" class="form-control form-control-sm" name="date" value="' .
                 date_to_str($trans['date'], '__mm__/__dd__/__yyyy__', false) . '" />', false);
-            print_table_cell('<input length="6" name="no" value="' .
+            print_table_cell('<input type="text" class="form-control form-control-sm" name="num" value="' .
                 (empty($trans['no']) ? '' : htmlentities((string)$trans['no'])) . '"/>', false);
-            print_table_cell('<input length="8" name="amount" value="' .
+            print_table_cell('<input type="text" class="form-control form-control-sm" name="amount" value="' .
                 sprintf('%.2f', $trans['amount']) . '" />', false);
-            print_table_cell('<input length="50" name="description" value="' .
+            print_table_cell('<input type="text" class="form-control form-control-sm" name="description" value="' .
                 htmlentities($d) . '" />', false);
-            print_table_cell('<input length="20" name="memo" value="" />', false);
-            print_table_cell('', false);
+            print_table_cell('<input type="text" class="form-control form-control-sm" name="memo" value="" />', false);
             print "</tr>\n";
             close_table();
-            print "<input name=\"add\" type=\"submit\" value=\"Add New &amp Reconcile\">\n";
+            // A <button> with no value attribute submits an empty string, which the
+            // handler reads as "not adding" -- keep an explicit value here.
+            print '<button name="add" type="submit" value="1" class="btn btn-success">Add New &amp; Reconcile</button>' . "\n";
             print "</form>\n";
         }
     } else {
-        echo "Sequence $seq not found.\n";
+        echo '<div class="alert alert-warning">Sequence ' . $seq . ' not found.</div>' . "\n";
     }
     dbi_free_result($res);
 }
@@ -257,9 +267,7 @@ if ($allDone || $showTable == 1) {
     $arr = ['Bank Chk#', 'Bank Amount', 'Bank Date', 'Bank Description',
         'Chk#', 'Amount', 'Date', 'Description', 'Memo'];
     open_table($arr);
-    $rowNum = 0;
     while ($row = dbi_fetch_row($res)) {
-        $rowNum++;
         $i = 0;
         $trans = [
             'bank.acct_id' => $row[$i++],
@@ -278,56 +286,56 @@ if ($allDone || $showTable == 1) {
             'my.description' => $row[$i++],
             'my.reconciled' => $row[$i++],
         ];
-        print "<tr>";
-        $odd = ($rowNum % 2 > 0) ? 'odd' : 'even';
-        $css = ($trans['bank.amount'] > 0.0) ? 'deposit' : "withdrawal-$odd";
-        print "<td class=\"$css\" align=\"right\">" .
+        $rowClass = ($trans['bank.amount'] > 0.0) ? 'table-success' : '';
+        print "<tr class=\"$rowClass\">";
+        print "<td class=\"text-end\">" .
             (empty($trans['bank.chk_no']) ? '-' : htmlentities((string)$trans['bank.chk_no'])) . "</td>";
-        print "<td class=\"$css\" align=\"right\">" .
+        print "<td class=\"text-end\">" .
             sprintf('%.2f', $trans['bank.amount']) . "</td>";
-        print "<td class=\"$css\">" .
+        print "<td>" .
             date_to_str($trans['bank.date'], '__mm__/__dd__/__yyyy__', false) . "</td>";
-        print "<td class=\"$css\">" .
+        print "<td>" .
             htmlentities($trans['bank.description']) . "</td>";
-        print "<td class=\"$css\" align=\"right\">" .
+        print "<td class=\"text-end\">" .
             (empty($trans['my.chk_no']) ? '-' : htmlentities((string)$trans['my.chk_no'])) . "</td>";
-        print "<td class=\"$css\" align=\"right\">" .
+        print "<td class=\"text-end\">" .
             sprintf('%.2f', $trans['my.amount']) . "</td>";
-        print "<td class=\"$css\">" .
+        print "<td>" .
             date_to_str($trans['my.date'], '__mm__/__dd__/__yyyy__', false) . "</td>";
-        print "<td class=\"$css\">" .
+        print "<td>" .
             htmlentities($trans['my.description']) . "</td>";
-        print "<td class=\"$css\">" .
+        print "<td>" .
             htmlentities($trans['my.memo'] ?? '') . "</td>";
         print "</tr>";
     }
     close_table();
     dbi_free_result($res);
 } else {
-    print "<br /><a href=\"" . htmlentities($_SERVER['REQUEST_URI']) . "&showTable=1\">Show reconciled transactions</a>\n";
+    print '<p class="mt-3"><a class="btn btn-sm btn-outline-secondary" href="' . htmlentities($_SERVER['REQUEST_URI']) . '&showTable=1">Show reconciled transactions</a></p>' . "\n";
 }
 
+// Navigation links
+$navLinks = [];
 if ($seq < ($count - 1)) {
     if (!$allDone) {
         $res = dbi_execute(
             'SELECT chk_sequence FROM chk_bank_trans WHERE chk_acct_id = ? AND chk_statement_id = ? AND chk_trans_id IS NULL AND chk_sequence > ? ORDER BY chk_sequence',
             [$acct, $statement, $seq]
         );
-        echo "<br><br>";
         if ($res) {
             if ($row = dbi_fetch_row($res)) {
-                print "<br /><a href=\"reconcile.php?acct=$acct&statement=$statement&seq=" .
-                    $row[0] . "\">Next Bank Transaction (Not Reconciled)</a>\n";
+                $navLinks[] = '<a class="btn btn-sm btn-outline-primary me-2" href="reconcile.php?acct=' . $acct . '&statement=' . $statement . '&seq=' . $row[0] . '">Next (Not Reconciled)</a>';
             }
             dbi_free_result($res);
         }
     }
-    print "<br /><a href=\"reconcile.php?acct=$acct&statement=$statement&seq=" .
-        ($seq + 1) . "\">Next Bank Transaction</a>\n";
+    $navLinks[] = '<a class="btn btn-sm btn-outline-secondary me-2" href="reconcile.php?acct=' . $acct . '&statement=' . $statement . '&seq=' . ($seq + 1) . '">Next</a>';
 }
 if ($seq > 0) {
-    print "<br /><a href=\"reconcile.php?acct=$acct&statement=$statement&seq=" .
-        ($seq - 1) . "\">Previous Bank Transaction</a>\n";
+    $navLinks[] = '<a class="btn btn-sm btn-outline-secondary me-2" href="reconcile.php?acct=' . $acct . '&statement=' . $statement . '&seq=' . ($seq - 1) . '">Previous</a>';
+}
+if (!empty($navLinks)) {
+    echo '<div class="mt-3 mb-3">' . implode('', $navLinks) . '</div>' . "\n";
 }
 
 print_trailer();
