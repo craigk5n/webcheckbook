@@ -655,6 +655,179 @@ function parse_date_input(string $date): string
 }
 
 /**
+ * Parses a user-entered dollar amount into an absolute value.
+ *
+ * Accepts values with currency symbols, commas, and surrounding whitespace
+ * (for example "$1,234.56").  The sign is discarded: callers use the result to
+ * compare against ABS(chk_amount) so a single filter matches both deposits and
+ * withdrawals.
+ *
+ * @param string $value The amount string to parse.
+ * @return float|null Absolute amount, or null if empty or not a number.
+ */
+function parse_amount_input(string $value): ?float
+{
+    $value = trim($value);
+    if ($value === '') {
+        return null;
+    }
+
+    // Drop currency symbols, thousands separators, and stray spaces.
+    $clean = preg_replace('/[^0-9.]/', '', $value);
+    if ($clean === '' || !is_numeric($clean)) {
+        return null;
+    }
+
+    return abs((float)$clean);
+}
+
+/**
+ * Normalizes a check number for comparison.
+ *
+ * chk_no is stored as an INT, so "0123" and "123" are the same value and an
+ * empty string and NULL both mean "no check number".
+ *
+ * @param string|int|null $num The check number to normalize.
+ * @return string Normalized check number, or an empty string if there is none.
+ */
+function normalize_check_number(string|int|null $num): string
+{
+    $num = trim((string)($num ?? ''));
+    if ($num === '') {
+        return '';
+    }
+
+    return ctype_digit($num) ? (string)(int)$num : $num;
+}
+
+/**
+ * Describes the changes being made to a reconciled transaction.
+ *
+ * Only the date and check number may be changed on a reconciled transaction, so
+ * only those two fields are compared.  The result drives the confirmation the
+ * user sees before the change is saved.
+ *
+ * @param array $original Stored values, keys: date (YYYYMMDD), num.
+ * @param array $updated Submitted values, same keys.
+ * @return array<int, array{field: string, label: string, from: string, to: string}>
+ *               One entry per changed field; empty if nothing changed.
+ */
+function describe_reconciled_changes(array $original, array $updated): array
+{
+    $none = translate('(none)');
+    $changes = [];
+
+    $oldDate = trim((string)($original['date'] ?? ''));
+    $newDate = trim((string)($updated['date'] ?? ''));
+    if ($oldDate !== $newDate) {
+        $changes[] = [
+            'field' => 'date',
+            'label' => translate('Date'),
+            'from' => $oldDate === '' ? $none : date_to_str($oldDate, '__mm__/__dd__/__yyyy__', false),
+            'to' => $newDate === '' ? $none : date_to_str($newDate, '__mm__/__dd__/__yyyy__', false),
+        ];
+    }
+
+    $oldNum = normalize_check_number($original['num'] ?? '');
+    $newNum = normalize_check_number($updated['num'] ?? '');
+    if ($oldNum !== $newNum) {
+        $changes[] = [
+            'field' => 'num',
+            'label' => translate('ChkNo'),
+            'from' => $oldNum === '' ? $none : $oldNum,
+            'to' => $newNum === '' ? $none : $newNum,
+        ];
+    }
+
+    return $changes;
+}
+
+/**
+ * Retrieves the imported bank statement line a transaction was reconciled against.
+ *
+ * @param int $acct The account id.
+ * @param int $transId The transaction id.
+ * @return array|null Keys: date, num, amount, description, statement_id; null if unmatched.
+ */
+function get_matched_bank_trans(int $acct, int $transId): ?array
+{
+    $sql = 'SELECT chk_date, chk_no, chk_amount, chk_description, chk_statement_id ' .
+           'FROM chk_bank_trans WHERE chk_acct_id = ? AND chk_trans_id = ? ' .
+           'ORDER BY chk_statement_id, chk_sequence';
+    $res = dbi_execute($sql, [$acct, $transId]);
+    if (!$res) {
+        return null;
+    }
+
+    $bankTrans = null;
+    if ($row = dbi_fetch_row($res)) {
+        $bankTrans = [
+            'date' => (string)$row[0],
+            'num' => $row[1] !== null ? (string)$row[1] : '',
+            'amount' => (float)$row[2],
+            'description' => $row[3] !== null ? (string)$row[3] : '',
+            'statement_id' => (int)$row[4],
+        ];
+    }
+    dbi_free_result($res);
+
+    return $bankTrans;
+}
+
+/**
+ * Formats a bank statement line as a single-line summary for display.
+ *
+ * @param array $bankTrans Bank transaction as returned by get_matched_bank_trans().
+ * @return string Summary such as "01/15/2026 - ChkNo 1234 - -45.00 - HARDWARE STORE".
+ */
+function format_bank_trans_summary(array $bankTrans): string
+{
+    $parts = [];
+
+    $date = trim((string)($bankTrans['date'] ?? ''));
+    if ($date !== '') {
+        $parts[] = date_to_str($date, '__mm__/__dd__/__yyyy__', false);
+    }
+
+    $num = normalize_check_number($bankTrans['num'] ?? '');
+    if ($num !== '') {
+        $parts[] = translate('ChkNo') . ' ' . $num;
+    }
+
+    if (isset($bankTrans['amount'])) {
+        $parts[] = sprintf('%.2f', (float)$bankTrans['amount']);
+    }
+
+    $description = trim((string)($bankTrans['description'] ?? ''));
+    if ($description !== '') {
+        $parts[] = $description;
+    }
+
+    return implode(" \u{00B7} ", $parts);
+}
+
+/**
+ * Reads one row from an open CSV file.
+ *
+ * PHP's fgetcsv() defaults its $escape parameter to a backslash, which is not
+ * RFC 4180 behavior.  A quoted field ending in a backslash -- banks emit these,
+ * e.g. "...TAX REFUND*30\" -- then reads as an escaped quote, so the field never
+ * closes and the parser swallows the rest of the record and the following lines,
+ * producing one oversized row.  Passing an empty escape restores RFC 4180
+ * behavior, where only a doubled "" escapes a quote.
+ *
+ * The length limit is also dropped so a long description is never split across
+ * two rows.
+ *
+ * @param resource $handle An open file handle positioned at the start of a row.
+ * @return array|false The parsed fields, or false at EOF.
+ */
+function csv_read_row($handle): array|false
+{
+    return fgetcsv($handle, 0, ',', '"', '');
+}
+
+/**
  * Parses CSV header row and returns column indices.
  *
  * @param array $headers Array of header strings from the CSV first row.
