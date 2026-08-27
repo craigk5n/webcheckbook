@@ -8,7 +8,7 @@ WebCheckbook is a self-contained PHP web application for managing personal bank 
 
 ## Commands
 
-- **Run tests:** `./vendor/bin/phpunit` (68 tests covering date parsing, CSV import, amount handling, input validation)
+- **Run tests:** `./vendor/bin/phpunit` (88 tests covering date parsing, CSV import, amount handling, input validation, reconciled edits)
 - **Run single test:** `./vendor/bin/phpunit tests/DateParsingTest.php`
 - **Syntax check:** `php -l <file.php>`
 
@@ -22,7 +22,7 @@ WebCheckbook is a self-contained PHP web application for managing personal bank 
 - `config.php` — DB credentials (`$db_type = "pdo_mysql"`), timezone, app settings
 - `connect.php` — DB connection initialization
 - `php-dbi.php` — PDO database abstraction layer (functional API wrapping PDO)
-- `functions.php` — Core utilities: input parsing, date formatting, balance calculation, transaction matching, CSV parsing, shared helpers (`get_account_info()`, `get_next_trans_id()`, `parse_date_input()`, `parse_csv_headers()`, `parse_csv_row()`)
+- `functions.php` — Core utilities: input parsing, date formatting, balance calculation, transaction matching, CSV parsing, shared helpers (`get_account_info()`, `get_next_trans_id()`, `parse_date_input()`, `parse_amount_input()`, `parse_csv_headers()`, `parse_csv_row()`, `normalize_check_number()`, `describe_reconciled_changes()`, `get_matched_bank_trans()`, `format_bank_trans_summary()`)
 - `ui.php` — HTML rendering with Bootstrap 5 (navbar, cards, tables, badges)
 - `translate.php` — i18n system loading `translations/{Language}.txt` key:value files
 
@@ -52,6 +52,7 @@ Dates stored as YYYYMMDD integers. Amounts are FLOAT (positive=deposit, negative
 - **Output escaping:** Use `htmlentities()` / `htmlspecialchars()` for all user data rendered in HTML
 - **PHP 8 strict types:** Files use `declare(strict_types=1)` and typed function signatures
 - **Translation:** Use `translate('key')` / `etranslate('key')` for UI strings
+- **Reconciled transactions:** only date and check number are editable. `edit_trans.php` locks the other fields and confirms in a modal; `edit_trans_handler.php` re-checks server-side and renders a confirmation page when the `confirm` flag is absent, so it also works without JavaScript
 - **No authentication built-in** — relies on `.htaccess` or reverse proxy
 
 ## Testing
@@ -61,6 +62,7 @@ PHPUnit tests in `tests/` with a bootstrap that stubs `translate()` and `fatalEr
 - `CsvParsingTest.php` — `parse_csv_headers()`, `validate_csv_headers()`, `parse_csv_row()`, full pipeline
 - `AmountHandlingTest.php` — `determine_transaction_type()`, `format_amount()`, sign conventions
 - `InputValidationTest.php` — `getValue()`, `getIntValue()`, SQL injection rejection
+- `ReconciledEditTest.php` — `normalize_check_number()`, `describe_reconciled_changes()`, `format_bank_trans_summary()`
 
 ## Setup
 
