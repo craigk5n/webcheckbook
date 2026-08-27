@@ -23,9 +23,9 @@ CREATE TABLE chk_account (
   /* account number */
   chk_account_no VARCHAR(25) NULL,
   /* Current balance */
-  chk_balance FLOAT NOT NULL DEFAULT 0,
+  chk_balance DECIMAL(14,2) NOT NULL DEFAULT 0,
   /* Current bank balance */
-  chk_bank_balance FLOAT NOT NULL DEFAULT 0,
+  chk_bank_balance DECIMAL(14,2) NOT NULL DEFAULT 0,
   /* Is account archived? (Y/N) */
   chk_is_archived CHAR(1) DEFAULT 'N',
   PRIMARY KEY ( chk_acct_id )
@@ -51,7 +51,7 @@ CREATE TABLE chk_trans (
   /* Check number */
   chk_no INT NULL,
   /* Amount (positive for deposit, negative for all else) */
-  chk_amount FLOAT NOT NULL,
+  chk_amount DECIMAL(14,2) NOT NULL,
   /* Date of transaction (YYYYMMDD) format */
   chk_date INT NOT NULL,
   /* Description */
@@ -93,7 +93,7 @@ CREATE TABLE chk_bank_trans (
   /* Check number */
   chk_no INT NULL,
   /* Amount (positive for deposit, negative for all else) */
-  chk_amount FLOAT NOT NULL,
+  chk_amount DECIMAL(14,2) NOT NULL,
   /* Date of transaction (YYYYMMDD) format */
   chk_date INT NOT NULL,
   /* Description */

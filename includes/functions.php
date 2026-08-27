@@ -314,10 +314,13 @@ if (!function_exists('fatalError')) {
  */
 function update_balances(int $acct): void
 {
+    // chk_amount is DECIMAL, so SUM() comes back from PDO as an exact decimal
+    // string.  Bind it through as-is: casting to a PHP float here would round
+    // the total and reintroduce the drift the DECIMAL columns exist to prevent.
     $res = dbi_execute('SELECT SUM(chk_amount) FROM chk_trans WHERE chk_acct_id = ?', [$acct]);
     if ($res) {
         $row = dbi_fetch_row($res);
-        $sum = (float)($row[0] ?? 0);
+        $sum = $row[0] ?? '0.00';
         dbi_execute('UPDATE chk_account SET chk_balance = ? WHERE chk_acct_id = ?', [$sum, $acct]);
         dbi_free_result($res);
     } else {
@@ -327,7 +330,7 @@ function update_balances(int $acct): void
     $res = dbi_execute('SELECT SUM(chk_amount) FROM chk_trans WHERE chk_acct_id = ? AND chk_reconciled = ?', [$acct, 'Y']);
     if ($res) {
         $row = dbi_fetch_row($res);
-        $sum = (float)($row[0] ?? 0);
+        $sum = $row[0] ?? '0.00';
         dbi_execute('UPDATE chk_account SET chk_bank_balance = ? WHERE chk_acct_id = ?', [$sum, $acct]);
         dbi_free_result($res);
     } else {
