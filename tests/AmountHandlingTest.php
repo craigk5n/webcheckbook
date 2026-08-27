@@ -33,6 +33,41 @@ class AmountHandlingTest extends TestCase
         $this->assertSame(1, determine_transaction_type(100.00, '1001'));
     }
 
+    // --- parse_amount_input() tests ---
+
+    public function testParseAmountInputPlainNumbers(): void
+    {
+        $this->assertSame(45.0, parse_amount_input('45'));
+        $this->assertSame(45.99, parse_amount_input('45.99'));
+        $this->assertSame(0.0, parse_amount_input('0'));
+    }
+
+    public function testParseAmountInputIgnoresSign(): void
+    {
+        // Filters compare against ABS(chk_amount), so the sign is dropped.
+        $this->assertSame(45.0, parse_amount_input('-45'));
+        $this->assertSame(45.0, parse_amount_input('45'));
+    }
+
+    public function testParseAmountInputStripsCurrencyFormatting(): void
+    {
+        $this->assertSame(1234.56, parse_amount_input('$1,234.56'));
+        $this->assertSame(1234.56, parse_amount_input('  1,234.56  '));
+    }
+
+    public function testParseAmountInputEmptyIsNull(): void
+    {
+        $this->assertNull(parse_amount_input(''));
+        $this->assertNull(parse_amount_input('   '));
+    }
+
+    public function testParseAmountInputNonNumericIsNull(): void
+    {
+        $this->assertNull(parse_amount_input('abc'));
+        $this->assertNull(parse_amount_input('$'));
+        $this->assertNull(parse_amount_input('1.2.3'));
+    }
+
     // --- format_amount() tests ---
 
     public function testFormatAmountTwoDecimals(): void
