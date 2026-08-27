@@ -9,3 +9,4 @@ NRL.sql
 vendor
 includes/config.php
 tools/output/
+.phpunit.result.cache
